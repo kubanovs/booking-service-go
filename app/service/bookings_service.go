@@ -124,6 +124,10 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
 	}
 
+	if err := booking.RollbackCancel(); err != nil {
+		return err
+	}
+
 	if err := s.repo.Update(ctx, booking); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
