@@ -7,17 +7,25 @@ const (
 		RETURNING id`
 
 	queryGetBookingByID = `
-		SELECT id, status, user_id, resource_id, start_date, end_date, created_at
+		SELECT id, status, user_id, resource_id, start_date, end_date, created_at,
+		       status_before_cancellation, request_cancellation_timestamp
 		FROM bookings
 		WHERE id = $1`
 
-	queryUpdateBookingStatus = `
+	queryUpdateBooking = `
 		UPDATE bookings
-		SET status = $1
-		WHERE id = $2`
+		SET status = $1,
+		    status_before_cancellation = $2,
+		    request_cancellation_timestamp = $3,
+		    user_id = $4,
+		    resource_id = $5,
+		    start_date = $6,
+		    end_date = $7
+		WHERE id = $8`
 
 	queryGetBookingsByFilter = `
-		SELECT id, status, user_id, resource_id, start_date, end_date, created_at
+		SELECT id, status, user_id, resource_id, start_date, end_date, created_at,
+		       status_before_cancellation, request_cancellation_timestamp
 		FROM bookings
 		WHERE ($1::BIGINT IS NULL OR user_id = $1)
 		  AND ($2::BIGINT IS NULL OR resource_id = $2)
@@ -33,7 +41,8 @@ const (
 		  AND ($3::VARCHAR IS NULL OR status = $3)`
 
 	queryGetAwaitingConfirmation = `
-		SELECT id, status, user_id, resource_id, start_date, end_date, created_at
+		SELECT id, status, user_id, resource_id, start_date, end_date, created_at,
+		       status_before_cancellation, request_cancellation_timestamp
 		FROM bookings
 		WHERE status = 'awaits_confirmation'
 		ORDER BY created_at ASC
