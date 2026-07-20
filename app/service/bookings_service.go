@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -115,12 +116,12 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64) error {
 
 func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error {
 	booking, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return err
-	}
 
-	if err := booking.RollbackCancel(); err != nil {
-		return err
+	switch {
+	case errors.Is(err, models.ErrBookingNotFound):
+		return fmt.Errorf("не найдено бронирование с id=%d: %w", id, err)
+	case err != nil:
+		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
 	}
 
 	if err := s.repo.Update(ctx, booking); err != nil {

@@ -6,16 +6,16 @@ import "time"
 type BookingStatus string
 
 const (
-	BookingStatusAwaitsConfirmation BookingStatus = "awaits_confirmation"
-	BookingStatusConfirmed          BookingStatus = "confirmed"
-	BookingStatusCancelled          BookingStatus = "cancelled"
-	BookingCancellationPending      BookingStatus = "cancellation_pending"
+	BookingStatusAwaitsConfirmation  BookingStatus = "awaits_confirmation"
+	BookingStatusConfirmed           BookingStatus = "confirmed"
+	BookingStatusCancelled           BookingStatus = "cancelled"
+	BookingStatusCancellationPending BookingStatus = "cancellation_pending"
 )
 
 // IsValid проверяет, что статус принадлежит допустимому множеству.
 func (s BookingStatus) IsValid() bool {
 	switch s {
-	case BookingStatusAwaitsConfirmation, BookingStatusConfirmed, BookingStatusCancelled, BookingCancellationPending:
+	case BookingStatusAwaitsConfirmation, BookingStatusConfirmed, BookingStatusCancelled, BookingStatusCancellationPending:
 		return true
 	default:
 		return false
@@ -110,14 +110,14 @@ func (b *Booking) beginCancellation(today time.Time) {
 	t := today
 	b.statusBeforeCancellation = &prev
 	b.requestCancellationTimestamp = &t
-	b.status = BookingCancellationPending
+	b.status = BookingStatusCancellationPending
 }
 
 // RollbackCancel откатывает статус CancellationPending к предыдущему.
 // Метаданные отмены сбрасываются в nil (в БД -> NULL): бронь снова активна.
 func (b *Booking) RollbackCancel() error {
 	switch b.status {
-	case BookingCancellationPending:
+	case BookingStatusCancellationPending:
 		if b.statusBeforeCancellation == nil {
 			return ErrInvalidStatusTransition
 		}
@@ -133,7 +133,7 @@ func (b *Booking) RollbackCancel() error {
 // FinishCancel переводит статус в Cancelled
 func (b *Booking) FinishCancel() error {
 	switch b.status {
-	case BookingCancellationPending:
+	case BookingStatusCancellationPending:
 		b.status = BookingStatusCancelled
 		b.statusBeforeCancellation = nil
 		b.requestCancellationTimestamp = nil

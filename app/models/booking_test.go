@@ -63,7 +63,7 @@ func TestCancel_FromAwaitsConfirmation(t *testing.T) {
 	err := booking.StartCancel(time.Now())
 
 	require.NoError(t, err)
-	assert.Equal(t, models.BookingCancellationPending, booking.Status())
+	assert.Equal(t, models.BookingStatusCancellationPending, booking.Status())
 }
 
 func TestCancel_FromConfirmed_FutureStartDate(t *testing.T) {
@@ -74,7 +74,7 @@ func TestCancel_FromConfirmed_FutureStartDate(t *testing.T) {
 	err := booking.StartCancel(today)
 
 	require.NoError(t, err)
-	assert.Equal(t, models.BookingCancellationPending, booking.Status())
+	assert.Equal(t, models.BookingStatusCancellationPending, booking.Status())
 }
 
 func TestCancel_FromConfirmed_PastStartDate_Error(t *testing.T) {
@@ -103,9 +103,61 @@ func TestCancel_FromCancelled_Error(t *testing.T) {
 	assert.ErrorIs(t, err, models.ErrInvalidStatusTransition)
 }
 
+func TestFinishCancel_FromCancelPendingStatus(t *testing.T) {
+	booking := createTestBookingCancelStarted()
+
+	err := booking.FinishCancel()
+
+	require.NoError(t, err)
+	assert.Equal(t, models.BookingStatusCancelled, booking.Status())
+}
+
+func TestFinishCancel_FromOtherStatus(t *testing.T) {
+	booking := createTestBooking(t)
+	err := booking.FinishCancel()
+
+	assert.ErrorIs(t, err, models.ErrInvalidStatusTransition)
+}
+
+func TestRollbackCancel_FromCancelPendingStatus(t *testing.T) {
+	booking := createTestBookingCancelStarted()
+
+	err := booking.RollbackCancel()
+
+	require.NoError(t, err, models.ErrInvalidStatusTransition)
+	assert.Equal(t, booking.Status(), models.BookingStatusAwaitsConfirmation)
+	assert.Empty(t, booking.StatusBeforeCancellation())
+	assert.Empty(t, booking.RequestCancellationTimestamp())
+}
+
+func TestRollbackCancel_FromOtherStatus(t *testing.T) {
+	booking := createTestBooking(t)
+
+	err := booking.RollbackCancel()
+
+	assert.Equal(t, err, models.ErrInvalidStatusTransition)
+}
+
 func createTestBooking(t *testing.T) *models.Booking {
 	t.Helper()
 	b, err := models.NewBooking(1, 10, time.Now().AddDate(0, 0, 7), time.Now().AddDate(0, 0, 14))
 	require.NoError(t, err)
 	return b
+}
+
+func createTestBookingCancelStarted() *models.Booking {
+	statusBeforeCancellation := models.BookingStatusAwaitsConfirmation
+	cancellationReqTime := time.Now().Add(1 * time.Hour)
+
+	return models.RestoreBooking(
+		1,
+		models.BookingStatusCancellationPending,
+		0,
+		0,
+		time.Now().AddDate(0, 0, 7),
+		time.Now().AddDate(0, 0, 14),
+		time.Now(),
+		&statusBeforeCancellation,
+		&cancellationReqTime,
+	)
 }
