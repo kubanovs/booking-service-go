@@ -90,8 +90,12 @@ func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingReque
 //  4. Публикация команды в Catalog
 func (s *BookingsService) Cancel(ctx context.Context, id int64) error {
 	booking, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return err
+	switch {
+	case errors.Is(err, models.ErrBookingNotFound):
+		s.logger.Warn("не найдено бронирование", zap.Int64("id", id), zap.Error(err))
+		return nil
+	case err != nil:
+		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
 	}
 
 	if err := booking.StartCancel(time.Now()); err != nil {
@@ -119,7 +123,8 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 
 	switch {
 	case errors.Is(err, models.ErrBookingNotFound):
-		return fmt.Errorf("не найдено бронирование с id=%d: %w", id, err)
+		s.logger.Warn("не найдено бронирование", zap.Int64("id", id), zap.Error(err))
+		return nil
 	case err != nil:
 		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
 	}

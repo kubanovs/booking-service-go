@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// CancelBookingErrorHandler обрабатывает события BookingJobDenied.
+// CancelBookingErrorHandler обрабатывает события CancelBookingError.
 type CancelBookingErrorHandler struct {
 	service *service.BookingsService
 	logger  *zap.Logger
