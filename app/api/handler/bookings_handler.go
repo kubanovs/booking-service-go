@@ -144,6 +144,7 @@ func (h *BookingsHandler) CalcStatistic(w http.ResponseWriter, r *http.Request) 
 
 	if dateFrom.After(dateTo) {
 		writeProblemDetails(w, http.StatusBadRequest, "dateFrom позже чем dateTo", "")
+		return
 	}
 
 	stats, err := h.queries.CalcStatistic(r.Context(), dateFrom, dateTo)
