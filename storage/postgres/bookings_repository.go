@@ -148,6 +148,31 @@ func (r *BookingsRepository) GetAwaitingConfirmation(ctx context.Context, limit 
 	return bookings, rows.Err()
 }
 
+// GetAwaitingCancellation возвращает бронирования в статусе CancellationPending,
+// для которых с момента запроса отмены прошло не менее timeout.
+func (r *BookingsRepository) GetAwaitingCancellation(ctx context.Context, limit int, timeout time.Duration) ([]models.Booking, error) {
+	rows, err := r.pool.Query(ctx, queryGetAwaitingCancellation, limit, timeout.Microseconds())
+	if err != nil {
+		return nil, fmt.Errorf("получение бронирований для отмены: %w", err)
+	}
+	defer rows.Close()
+
+	var bookings []models.Booking
+	for rows.Next() {
+		booking, err := r.scanBookingFromRows(rows)
+		if err != nil {
+			return nil, fmt.Errorf("сканирование бронирования: %w", err)
+		}
+		bookings = append(bookings, *booking)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("итерация по строкам: %w", err)
+	}
+
+	return bookings, nil
+}
+
 func (r *BookingsRepository) CountBookingsForPeriod(ctx context.Context, dateFrom time.Time, dateTo time.Time) (int, error) {
 	rows, err := r.pool.Query(ctx, queryCountAllBookingsForPeriod, dateFrom, dateTo)
 	if err != nil {

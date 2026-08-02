@@ -49,6 +49,16 @@ const (
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED`
 
+	queryGetAwaitingCancellation = `
+		SELECT id, status, user_id, resource_id, start_date, end_date, created_at,
+		       status_before_cancellation, request_cancellation_timestamp
+		FROM bookings
+		WHERE status = 'cancellation_pending'
+		  AND request_cancellation_timestamp IS NOT NULL
+		  AND request_cancellation_timestamp <= NOW() - ($2::bigint * INTERVAL '1 microsecond')
+		ORDER BY request_cancellation_timestamp ASC
+		LIMIT $1`
+
 	queryCountAllBookingsForPeriod = `
 		SELECT COUNT(*) AS total_bookings
 		FROM bookings

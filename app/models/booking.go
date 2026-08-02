@@ -88,6 +88,8 @@ func (b *Booking) Confirm() error {
 		return ErrInvalidStatusTransition
 	}
 	b.status = BookingStatusConfirmed
+	b.statusBeforeCancellation = nil
+	b.requestCancellationTimestamp = nil
 	return nil
 }
 
