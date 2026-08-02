@@ -187,7 +187,7 @@ func (r *BookingsRepository) GetStatusCountsForPeriod(ctx context.Context, dateF
 		stats[status] = count
 	}
 
-	return stats, nil
+	return stats, rows.Err()
 }
 
 func (r *BookingsRepository) GetTopResourcesForPeriod(ctx context.Context, limit int, dateFrom time.Time, dateTo time.Time) ([]int, error) {

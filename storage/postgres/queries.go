@@ -52,18 +52,18 @@ const (
 	queryCountAllBookingsForPeriod = `
 		SELECT COUNT(*) AS total_bookings
 		FROM bookings
-		WHERE created_at BETWEEN $1 AND $2`
+		WHERE created_at >= $1 AND created_at < ($2::date + INTERVAL '1 day')`
 
 	queryGetStatusCountsForPeriod = `
 		SELECT status, COUNT(*) AS total_bookings
 		FROM bookings
-		WHERE created_at BETWEEN $1 AND $2
+		WHERE created_at >= $1 AND created_at < ($2::date + INTERVAL '1 day')
 		GROUP BY status`
 
 	queryGetTopResourcesForPeriod = `
 		SELECT resource_id
 		FROM bookings
-		WHERE created_at BETWEEN $1 AND $2
+		WHERE created_at >= $1 AND created_at < ($2::date + INTERVAL '1 day')
 		GROUP BY resource_id
 		ORDER BY COUNT(*) DESC, resource_id
 		LIMIT $3`
