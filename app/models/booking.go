@@ -82,9 +82,9 @@ func NewBooking(userID, resourceID int64, startDate, endDate time.Time) (*Bookin
 }
 
 // Confirm подтверждает бронирование.
-// Допустимый переход: AwaitsConfirmation -> Confirmed.
+// Допустимый переход: AwaitsConfirmation || CancellationPending -> Confirmed.
 func (b *Booking) Confirm() error {
-	if b.status != BookingStatusAwaitsConfirmation {
+	if b.status != BookingStatusAwaitsConfirmation && b.status != BookingStatusCancellationPending {
 		return ErrInvalidStatusTransition
 	}
 	b.status = BookingStatusConfirmed

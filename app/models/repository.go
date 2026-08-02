@@ -23,6 +23,11 @@ type BookingRepository interface {
 	// с пессимистичной блокировкой (SELECT ... FOR UPDATE SKIP LOCKED).
 	GetAwaitingConfirmation(ctx context.Context, limit int) ([]Booking, error)
 
+	// GetAwaitingCancellation возвращает бронирования в статусе CancellationPending,
+	// для которых с момента запроса отмены прошло не менее timeout.
+	// Сортировка — от самых давних запросов отмены.
+	GetAwaitingCancellation(ctx context.Context, limit int, timeout time.Duration) ([]Booking, error)
+
 	CountBookingsForPeriod(ctx context.Context, dateFrom time.Time, dateTo time.Time) (int, error)
 
 	GetStatusCountsForPeriod(ctx context.Context, dateFrom time.Time, dateTo time.Time) (map[string]int, error)

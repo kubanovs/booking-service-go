@@ -169,6 +169,12 @@ func (s *BookingsService) Confirm(ctx context.Context, id int64) error {
 		return err
 	}
 
+	if booking.Status() == models.BookingStatusCancellationPending {
+		s.logger.Warn("race condition: подтверждение брони в процессе отмены",
+			zap.Int64("id", id),
+		)
+	}
+
 	if err := booking.Confirm(); err != nil {
 		return err
 	}
