@@ -54,5 +54,11 @@ type ProblemDetails struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+type BookingsStatistic struct {
+	Total                int            `json:"total"`
+	DistributionByStatus map[string]int `json:"distributionByStatus"`
+	TopResources         []int          `json:"topResources"`
+}
+
 // DateFormat -- формат даты для JSON-сериализации.
 const DateFormat = "2006-01-02"
