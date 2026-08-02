@@ -92,9 +92,16 @@ func (q *BookingsQueries) CalcStatistic(ctx context.Context, dateFrom time.Time,
 		return dto.BookingsStatistic{}, fmt.Errorf("ошибка подсчета общего количества бронирований: %w", err)
 	}
 
-	distributionByStatuses, err := q.repo.GetStatusCountsForPeriod(ctx, dateFrom, dateTo)
+	statusCounts, err := q.repo.GetStatusCountsForPeriod(ctx, dateFrom, dateTo)
 	if err != nil {
 		return dto.BookingsStatistic{}, fmt.Errorf("ошибка подсчета распределения по статусам: %w", err)
+	}
+
+	// Предзаполняем все допустимые статусы нулями, чтобы в ответе присутствовали
+	// даже те, по которым в периоде не было бронирований.
+	distributionByStatuses := make(map[string]int, len(models.AllBookingStatuses()))
+	for _, status := range models.AllBookingStatuses() {
+		distributionByStatuses[string(status)] = statusCounts[string(status)]
 	}
 
 	topResources, err := q.repo.GetTopResourcesForPeriod(ctx, 5, dateFrom, dateTo)

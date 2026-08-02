@@ -12,6 +12,16 @@ const (
 	BookingStatusCancellationPending BookingStatus = "cancellation_pending"
 )
 
+// AllBookingStatuses возвращает все допустимые статусы бронирования.
+func AllBookingStatuses() []BookingStatus {
+	return []BookingStatus{
+		BookingStatusAwaitsConfirmation,
+		BookingStatusConfirmed,
+		BookingStatusCancelled,
+		BookingStatusCancellationPending,
+	}
+}
+
 // IsValid проверяет, что статус принадлежит допустимому множеству.
 func (s BookingStatus) IsValid() bool {
 	switch s {
