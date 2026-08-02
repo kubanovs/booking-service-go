@@ -8,12 +8,13 @@ import (
 )
 
 type Config struct {
-	App      AppConfig
-	HTTP     HTTPConfig
-	Postgres PostgresConfig
-	Catalog  CatalogConfig
-	Worker   WorkerConfig
-	RabbitMQ RabbitMQConfig
+	App                AppConfig
+	HTTP               HTTPConfig
+	Postgres           PostgresConfig
+	Catalog            CatalogConfig
+	ConfirmationWorker ConfirmationWorkerConfig
+	CancellationWorker CancellationWorkerConfig
+	RabbitMQ           RabbitMQConfig
 }
 
 type AppConfig struct {
@@ -43,9 +44,15 @@ type CatalogConfig struct {
 	RetryBaseDelay time.Duration `envconfig:"CATALOG_RETRY_BASE_DELAY" default:"1s"`
 }
 
-type WorkerConfig struct {
+type ConfirmationWorkerConfig struct {
 	ConfirmationInterval time.Duration `envconfig:"WORKER_CONFIRMATION_INTERVAL" default:"30s"`
 	ConfirmationBatch    int           `envconfig:"WORKER_CONFIRMATION_BATCH" default:"10"`
+}
+
+type CancellationWorkerConfig struct {
+	CancellationInterval        time.Duration `envconfig:"WORKER_CANCELLATION_INTERVAL" default:"30s"`
+	CancellationBatch           int           `envconfig:"WORKER_CANCELLATION_BATCH" default:"10"`
+	CancellationAwaitingTimeout time.Duration `envconfig:"WORKER_CANCELLATION_AWAITING_TIMEOUT" default:"5m"`
 }
 
 type RabbitMQConfig struct {

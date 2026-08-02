@@ -1,6 +1,7 @@
 package main
 
 import (
+	"booking-service/app/worker"
 	"context"
 	"errors"
 	"fmt"
@@ -80,6 +81,8 @@ func main() {
 	// Хендлеры событий RabbitMQ
 	confirmedHandler := handlers.NewBookingConfirmedHandler(bookingsService, logger)
 	deniedHandler := handlers.NewBookingDeniedHandler(bookingsService, logger)
+	cancelErrorHandler := handlers.NewCancelBookingErrorHandler(bookingsService, logger)
+	cancelConfirmHandler := handlers.NewCancelBookingConfirmationHandler(bookingsService, logger)
 
 	// Контекст для graceful shutdown фоновых задач
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,11 +92,23 @@ func main() {
 	consumer := messaging.NewConsumer(mqConn, cfg.RabbitMQ.ExchangeName, cfg.RabbitMQ.QueuePrefix, logger)
 	consumer.Subscribe(messaging.QueueSuffixBookingJobConfirmed, messaging.RoutingKeyBookingJobConfirmed, confirmedHandler.Handle)
 	consumer.Subscribe(messaging.QueueSuffixBookingJobDenied, messaging.RoutingKeyBookingJobDenied, deniedHandler.Handle)
+	consumer.Subscribe(messaging.QueueSuffixBookingJobCancelError, messaging.RoutingKeyCancelBookingError, cancelErrorHandler.Handle)
+	consumer.Subscribe(messaging.QueueSuffixBookingJobCancelConfirmation, messaging.RoutingKeyCancelBookingConfirmation, cancelConfirmHandler.Handle)
 
 	if err := consumer.Start(ctx); err != nil {
 		logger.Error("не удалось запустить consumer", zap.Error(err))
 		os.Exit(1)
 	}
+
+	cancellationWorker := worker.NewCancellationWorker(
+		publisher,
+		repo,
+		cfg.CancellationWorker.CancellationInterval,
+		cfg.CancellationWorker.CancellationBatch,
+		cfg.CancellationWorker.CancellationAwaitingTimeout,
+		logger,
+	)
+	go cancellationWorker.Run(ctx)
 
 	// HTTP-хендлеры и роутер
 	bookingsHandler := handler.NewBookingsHandler(bookingsService, bookingsQueries, logger)

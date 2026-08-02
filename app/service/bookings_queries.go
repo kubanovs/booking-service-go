@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
@@ -83,6 +84,33 @@ func (q *BookingsQueries) GetByFilter(ctx context.Context, req dto.GetBookingsBy
 		Page:       filter.Page,
 		Size:       filter.Size,
 	}, nil
+}
+
+func (q *BookingsQueries) CalcStatistic(ctx context.Context, dateFrom time.Time, dateTo time.Time) (dto.BookingsStatistic, error) {
+	total, err := q.repo.CountBookingsForPeriod(ctx, dateFrom, dateTo)
+	if err != nil {
+		return dto.BookingsStatistic{}, fmt.Errorf("ошибка подсчета общего количества бронирований: %w", err)
+	}
+
+	statusCounts, err := q.repo.GetStatusCountsForPeriod(ctx, dateFrom, dateTo)
+	if err != nil {
+		return dto.BookingsStatistic{}, fmt.Errorf("ошибка подсчета распределения по статусам: %w", err)
+	}
+
+	// Предзаполняем все допустимые статусы нулями, чтобы в ответе присутствовали
+	// даже те, по которым в периоде не было бронирований.
+	distributionByStatuses := make(map[string]int, len(models.AllBookingStatuses()))
+	for _, status := range models.AllBookingStatuses() {
+		distributionByStatuses[string(status)] = statusCounts[string(status)]
+	}
+
+	topResources, err := q.repo.GetTopResourcesForPeriod(ctx, 5, dateFrom, dateTo)
+
+	if err != nil {
+		return dto.BookingsStatistic{}, fmt.Errorf("ошибка подсчета топа популярных ресурсов: %w", err)
+	}
+
+	return dto.BookingsStatistic{Total: total, DistributionByStatus: distributionByStatuses, TopResources: topResources}, nil
 }
 
 // mapBookingToResponse конвертирует доменный объект в DTO ответа.

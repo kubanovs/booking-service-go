@@ -41,16 +41,35 @@ type BookingJobDenied struct {
 	Reason    string `json:"Reason"`
 }
 
+type CancelBookingError struct {
+	EventId   string `json:"EventId"`
+	Id        int64  `json:"Id"`
+	RequestId string `json:"RequestId"` // BookingID в формате UUID
+	ErrorDesc string `json:"ErrorDesc"`
+}
+
+type CancelBookingConfirmation struct {
+	EventId   string `json:"EventId"`
+	Id        int64  `json:"Id"`
+	RequestId string `json:"RequestId"`
+}
+
 // Routing keys для входящих событий от Catalog (consumer side, Rebus convention).
 const (
 	RoutingKeyBookingJobConfirmed = "BookingService.Catalog.Async.Api.Contracts.Events.BookingJobConfirmed, BookingService.Catalog.Async.Api.Contracts"
 	RoutingKeyBookingJobDenied    = "BookingService.Catalog.Async.Api.Contracts.Events.BookingJobDenied, BookingService.Catalog.Async.Api.Contracts"
+
+	// Возможно не соответсвует RoutingKey, которые будет проставлять Catalog
+	RoutingKeyCancelBookingError        = "BookingService.Catalog.Async.Api.Contracts.Events.CancelBookingError, BookingService.Catalog.Async.Api.Contracts"
+	RoutingKeyCancelBookingConfirmation = "BookingService.Catalog.Async.Api.Contracts.Events.CancelBookingConfirmation, BookingService.Catalog.Async.Api.Contracts"
 )
 
 // QueueSuffixes для входящих событий — читаемые имена суффиксов очередей.
 const (
-	QueueSuffixBookingJobConfirmed = "booking-job.confirmed"
-	QueueSuffixBookingJobDenied    = "booking-job.denied"
+	QueueSuffixBookingJobConfirmed          = "booking-job.confirmed"
+	QueueSuffixBookingJobDenied             = "booking-job.denied"
+	QueueSuffixBookingJobCancelError        = "booking-job.cancel-error"
+	QueueSuffixBookingJobCancelConfirmation = "booking-job.cancel-confirmation"
 )
 
 // Routing keys и типы для исходящих команд в Catalog (publisher side, Rebus convention).

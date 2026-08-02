@@ -42,7 +42,7 @@ func NewConfirmationWorker(
 		catalogClient: catalogClient,
 		interval:      interval,
 		batchSize:     batchSize,
-		logger:        logger,
+		logger:        logger.With(TypeConfirmation.LogField()),
 	}
 }
 
