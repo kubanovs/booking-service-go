@@ -148,6 +148,63 @@ func (r *BookingsRepository) GetAwaitingConfirmation(ctx context.Context, limit 
 	return bookings, rows.Err()
 }
 
+func (r *BookingsRepository) CountBookingsForPeriod(ctx context.Context, dateFrom time.Time, dateTo time.Time) (int, error) {
+	rows, err := r.pool.Query(ctx, queryCountAllBookingsForPeriod, dateFrom, dateTo)
+	if err != nil {
+		return 0, fmt.Errorf("подсчет общего числа бронирований: %w", err)
+	}
+	defer rows.Close()
+
+	totalCount, err := pgx.CollectOneRow(rows, pgx.RowTo[int])
+
+	if err != nil {
+		return 0, fmt.Errorf("маппинг сырой строки в число: %w", err)
+	}
+
+	return totalCount, nil
+}
+
+func (r *BookingsRepository) GetStatusCountsForPeriod(ctx context.Context, dateFrom time.Time, dateTo time.Time) (map[string]int, error) {
+	rows, err := r.pool.Query(ctx, queryGetStatusCountsForPeriod, dateFrom, dateTo)
+
+	if err != nil {
+		return nil, fmt.Errorf("подсчет числа бронирований по статусам: %w", err)
+	}
+
+	defer rows.Close()
+
+	stats := make(map[string]int)
+
+	for rows.Next() {
+		var status string
+		var count int
+
+		err := rows.Scan(&status, &count)
+		if err != nil {
+			return nil, fmt.Errorf("сканирование числа бронирований по статусам: %w", err)
+		}
+
+		stats[status] = count
+	}
+
+	return stats, nil
+}
+
+func (r *BookingsRepository) GetTopResourcesForPeriod(ctx context.Context, limit int, dateFrom time.Time, dateTo time.Time) ([]int, error) {
+	rows, err := r.pool.Query(ctx, queryGetTopResourcesForPeriod, dateFrom, dateTo, limit)
+	if err != nil {
+		return nil, fmt.Errorf("получение топа ресурсов: %w", err)
+	}
+	defer rows.Close()
+
+	resourceIDs, err := pgx.CollectRows(rows, pgx.RowTo[int])
+	if err != nil {
+		return nil, fmt.Errorf("маппинг сырых строк в список id ресурсов: %w", err)
+	}
+
+	return resourceIDs, nil
+}
+
 // scanBooking сканирует одну строку в доменный объект Booking.
 func (r *BookingsRepository) scanBooking(row pgx.Row) (*models.Booking, error) {
 	return scanBookingRow(row.Scan)

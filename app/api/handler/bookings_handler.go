@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
@@ -25,6 +26,7 @@ type BookingQueries interface {
 	GetByID(ctx context.Context, id int64) (dto.BookingResponse, error)
 	GetByFilter(ctx context.Context, req dto.GetBookingsByFilterRequest) (dto.PagedResponse[dto.BookingResponse], error)
 	GetStatus(ctx context.Context, id int64) (models.BookingStatus, error)
+	CalcStatistic(ctx context.Context, dateFrom time.Time, dateTo time.Time) (dto.BookingsStatistic, error)
 }
 
 // BookingsHandler содержит обработчики HTTP-запросов для бронирований.
@@ -127,6 +129,29 @@ func (h *BookingsHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.BookingStatusResponse{Status: string(status)})
 }
 
+func (h *BookingsHandler) CalcStatistic(w http.ResponseWriter, r *http.Request) {
+	dateFrom, err := parseDateParam(r, "dateFrom")
+	if err != nil {
+		writeProblemDetails(w, http.StatusBadRequest, "Некорректный dateFrom", err.Error())
+		return
+	}
+
+	dateTo, err := parseDateParam(r, "dateTo")
+	if err != nil {
+		writeProblemDetails(w, http.StatusBadRequest, "Некорректный dateTo", err.Error())
+		return
+	}
+
+	stats, err := h.queries.CalcStatistic(r.Context(), dateFrom, dateTo)
+
+	if err != nil {
+		h.handleServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, stats)
+}
+
 // handleServiceError маппит доменные ошибки на HTTP-ответы.
 func (h *BookingsHandler) handleServiceError(w http.ResponseWriter, err error) {
 	switch {
@@ -152,6 +177,11 @@ func (h *BookingsHandler) handleServiceError(w http.ResponseWriter, err error) {
 func parseIDParam(r *http.Request) (int64, error) {
 	idStr := chi.URLParam(r, "id")
 	return strconv.ParseInt(idStr, 10, 64)
+}
+
+func parseDateParam(r *http.Request, dateFieldName string) (time.Time, error) {
+	dateStr := r.URL.Query().Get(dateFieldName)
+	return time.Parse(dto.DateFormat, dateStr)
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
