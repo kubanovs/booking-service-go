@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"booking-service/app/models"
 	"context"
 	"errors"
 	"fmt"
@@ -8,8 +9,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"booking-service/app/models"
 )
 
 // BookingsRepository реализует models.BookingRepository.
@@ -17,67 +16,63 @@ type BookingsRepository struct {
 	pool *pgxpool.Pool
 }
 
-// NewBookingsRepository создаёт новый экземпляр BookingsRepository.
+// New создаёт новый экземпляр BookingsRepository.
 func NewBookingsRepository(pool *pgxpool.Pool) *BookingsRepository {
 	return &BookingsRepository{pool: pool}
 }
 
-// Create сохраняет новое бронирование.
-func (r *BookingsRepository) Create(ctx context.Context, booking *models.Booking) (int64, error) {
-	var id int64
-	err := r.pool.QueryRow(ctx, queryInsertBooking,
-		string(booking.Status()),
-		booking.UserID(),
-		booking.ResourceID(),
-		booking.StartDate(),
-		booking.EndDate(),
-		booking.CreatedAt(),
-	).Scan(&id)
+// CreateWithLog сохраняет новое бронирование и запись журнала о создании
+// в рамках одной транзакции: либо создаётся всё, либо ничего.
+func (r *BookingsRepository) CreateWithLog(ctx context.Context, b *models.Booking, initiatedBy string) (int64, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("старт транзакции: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // откат: no-op после успешного Commit
 
+	var id int64
+	err = tx.QueryRow(ctx, queryInsertBooking,
+		string(b.Status()),
+		b.UserID(),
+		b.ResourceID(),
+		b.StartDate(),
+		b.EndDate(),
+		b.CreatedAt(),
+	).Scan(&id)
 	if err != nil {
 		return 0, fmt.Errorf("создание бронирования: %w", err)
+	}
+
+	// Запись журнала о создании: предыдущего статуса нет (пустая строка),
+	// время события совпадает с моментом создания брони, причина отсутствует.
+	var noCause *string
+	if _, err := tx.Exec(ctx, queryInsertBookingLog,
+		id,
+		string(b.Status()),
+		"",
+		b.CreatedAt(),
+		noCause,
+		initiatedBy,
+	); err != nil {
+		return 0, fmt.Errorf("запись в журнал о создании: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("коммит транзакции: %w", err)
 	}
 	return id, nil
 }
 
 // GetByID возвращает бронирование по ID.
 func (r *BookingsRepository) GetByID(ctx context.Context, id int64) (*models.Booking, error) {
-	booking, err := r.scanBooking(r.pool.QueryRow(ctx, queryGetBookingByID, id))
+	b, err := r.scanBooking(r.pool.QueryRow(ctx, queryGetBookingByID, id))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrBookingNotFound
 		}
 		return nil, fmt.Errorf("получение бронирования id=%d: %w", id, err)
 	}
-	return booking, nil
-}
-
-// Update обновляет все изменяемые поля бронирования.
-func (r *BookingsRepository) Update(ctx context.Context, booking *models.Booking) error {
-	// nil-указатели уходят в БД как NULL напрямую, без «угадывания» по нулям.
-	var statusBefore *string
-	if s := booking.StatusBeforeCancellation(); s != nil {
-		v := string(*s)
-		statusBefore = &v
-	}
-
-	tag, err := r.pool.Exec(ctx, queryUpdateBooking,
-		string(booking.Status()),
-		statusBefore,
-		booking.RequestCancellationTimestamp(),
-		booking.UserID(),
-		booking.ResourceID(),
-		booking.StartDate(),
-		booking.EndDate(),
-		booking.ID(),
-	)
-	if err != nil {
-		return fmt.Errorf("обновление бронирования id=%d: %w", booking.ID(), err)
-	}
-	if tag.RowsAffected() == 0 {
-		return models.ErrBookingNotFound
-	}
-	return nil
+	return b, nil
 }
 
 // GetByFilter возвращает бронирования с фильтрацией и пагинацией.
@@ -113,11 +108,11 @@ func (r *BookingsRepository) GetByFilter(ctx context.Context, filter models.Book
 
 	var bookings []models.Booking
 	for rows.Next() {
-		booking, err := r.scanBookingFromRows(rows)
+		b, err := r.scanBookingFromRows(rows)
 		if err != nil {
 			return nil, 0, fmt.Errorf("сканирование бронирования: %w", err)
 		}
-		bookings = append(bookings, *booking)
+		bookings = append(bookings, *b)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -138,11 +133,11 @@ func (r *BookingsRepository) GetAwaitingConfirmation(ctx context.Context, limit 
 
 	var bookings []models.Booking
 	for rows.Next() {
-		booking, err := r.scanBookingFromRows(rows)
+		b, err := r.scanBookingFromRows(rows)
 		if err != nil {
 			return nil, fmt.Errorf("сканирование бронирования: %w", err)
 		}
-		bookings = append(bookings, *booking)
+		bookings = append(bookings, *b)
 	}
 
 	return bookings, rows.Err()
@@ -159,11 +154,11 @@ func (r *BookingsRepository) GetAwaitingCancellation(ctx context.Context, limit 
 
 	var bookings []models.Booking
 	for rows.Next() {
-		booking, err := r.scanBookingFromRows(rows)
+		b, err := r.scanBookingFromRows(rows)
 		if err != nil {
 			return nil, fmt.Errorf("сканирование бронирования: %w", err)
 		}
-		bookings = append(bookings, *booking)
+		bookings = append(bookings, *b)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -271,4 +266,112 @@ func scanBookingRow(scan func(dest ...any) error) (*models.Booking, error) {
 		id, models.BookingStatus(status), userID, resourceID,
 		startDate, endDate, createdAt, sb, cancelTS,
 	), nil
+}
+
+// UpdateWithLog обновляет бронирование и добавляет запись в журнал
+// в рамках одной транзакции: либо применяется всё, либо ничего.
+func (r *BookingsRepository) UpdateWithLog(ctx context.Context, b *models.Booking, log *models.EventLog) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("старт транзакции: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // откат: no-op после успешного Commit
+
+	var statusBefore *string
+	if s := b.StatusBeforeCancellation(); s != nil {
+		v := string(*s)
+		statusBefore = &v
+	}
+
+	tag, err := tx.Exec(ctx, queryUpdateBooking,
+		string(b.Status()),
+		statusBefore,
+		b.RequestCancellationTimestamp(),
+		b.UserID(),
+		b.ResourceID(),
+		b.StartDate(),
+		b.EndDate(),
+		b.ID(),
+	)
+	if err != nil {
+		return fmt.Errorf("обновление бронирования id=%d: %w", b.ID(), err)
+	}
+	if tag.RowsAffected() == 0 {
+		return models.ErrBookingNotFound
+	}
+
+	if _, err := tx.Exec(ctx, queryInsertBookingLog,
+		log.BookingID(),
+		string(log.NewStatus()),
+		string(log.PreviousStatus()),
+		log.EventTimestamp(),
+		log.Cause(),
+		log.InitiatedBy(),
+	); err != nil {
+		return fmt.Errorf("запись в журнал: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("коммит транзакции: %w", err)
+	}
+	return nil
+}
+
+// GetLogsByBookingID возвращает записи журнала по бронированию с пагинацией
+// (от новых к старым) и их общее количество.
+//
+// COUNT и выборка страницы выполняются в одной read-only транзакции с изоляцией
+// REPEATABLE READ, поэтому оба запроса видят единый снимок данных: total и список
+// логов согласованы даже при конкурентной вставке новых записей журнала.
+func (r *BookingsRepository) GetLogsByBookingID(ctx context.Context, bookingID int64, page, size int) ([]models.EventLog, int64, error) {
+	offset := (page - 1) * size
+
+	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("старт транзакции журнала booking_id=%d: %w", bookingID, err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // откат: no-op после успешного Commit
+
+	var total int64
+	if err := tx.QueryRow(ctx, queryCountBookingLogsByBookingID, bookingID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("подсчёт записей журнала по booking_id=%d: %w", bookingID, err)
+	}
+
+	rows, err := tx.Query(ctx, queryGetBookingLogsByBookingID, bookingID, size, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("получение записей журнала по booking_id=%d: %w", bookingID, err)
+	}
+
+	logs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.EventLog, error) {
+		var (
+			id          int64
+			bID         int64
+			newStatus   string
+			prevStatus  string
+			eventTS     time.Time
+			cause       *string
+			initiatedBy string
+		)
+		if err := row.Scan(&id, &bID, &newStatus, &prevStatus, &eventTS, &cause, &initiatedBy); err != nil {
+			return models.EventLog{}, err
+		}
+		return *models.NewEventLog(
+			id, bID,
+			models.BookingStatus(newStatus),
+			models.BookingStatus(prevStatus),
+			eventTS, cause, initiatedBy,
+		), nil
+	})
+	if err != nil {
+		return nil, 0, fmt.Errorf("сканирование записей журнала: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, 0, fmt.Errorf("коммит транзакции журнала booking_id=%d: %w", bookingID, err)
+	}
+
+	return logs, total, nil
 }

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"booking-service/app/models"
 	"context"
 	"fmt"
 	"time"
@@ -8,7 +9,6 @@ import (
 	"go.uber.org/zap"
 
 	"booking-service/app/api/dto"
-	"booking-service/app/models"
 )
 
 // BookingsQueries обрабатывает запросы (чтение данных) для бронирований.
@@ -37,11 +37,11 @@ func (q *BookingsQueries) GetByID(ctx context.Context, id int64) (dto.BookingRes
 
 // GetStatus возвращает статус бронирования по ID.
 func (q *BookingsQueries) GetStatus(ctx context.Context, id int64) (models.BookingStatus, error) {
-	booking, err := q.repo.GetByID(ctx, id)
+	b, err := q.repo.GetByID(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	return booking.Status(), nil
+	return b.Status(), nil
 }
 
 // GetByFilter возвращает список бронирований с пагинацией.
@@ -113,6 +113,38 @@ func (q *BookingsQueries) CalcStatistic(ctx context.Context, dateFrom time.Time,
 	return dto.BookingsStatistic{Total: total, DistributionByStatus: distributionByStatuses, TopResources: topResources}, nil
 }
 
+// GetHistory возвращает журнал изменений статусов бронирования с пагинацией.
+func (q *BookingsQueries) GetHistory(ctx context.Context, bookingID int64, page, size int) (dto.PagedResponse[dto.EventLogResponse], error) {
+	if page <= 0 {
+		page = 1
+	}
+	if size <= 0 {
+		size = 25
+	}
+
+	// Проверяем существование брони, чтобы отдать 404 вместо пустого списка.
+	if _, err := q.repo.GetByID(ctx, bookingID); err != nil {
+		return dto.PagedResponse[dto.EventLogResponse]{}, err
+	}
+
+	logs, totalCount, err := q.repo.GetLogsByBookingID(ctx, bookingID, page, size)
+	if err != nil {
+		return dto.PagedResponse[dto.EventLogResponse]{}, fmt.Errorf("получение журнала бронирования: %w", err)
+	}
+
+	items := make([]dto.EventLogResponse, 0, len(logs))
+	for i := range logs {
+		items = append(items, mapEventLogToResponse(&logs[i]))
+	}
+
+	return dto.PagedResponse[dto.EventLogResponse]{
+		Items:      items,
+		TotalCount: totalCount,
+		Page:       page,
+		Size:       size,
+	}, nil
+}
+
 // mapBookingToResponse конвертирует доменный объект в DTO ответа.
 func mapBookingToResponse(b *models.Booking) dto.BookingResponse {
 	return dto.BookingResponse{
@@ -122,6 +154,19 @@ func mapBookingToResponse(b *models.Booking) dto.BookingResponse {
 		ResourceID: b.ResourceID(),
 		StartDate:  b.StartDate().Format(dto.DateFormat),
 		EndDate:    b.EndDate().Format(dto.DateFormat),
-		CreatedAt:  b.CreatedAt().Format("2006-01-02T15:04:05Z07:00"),
+		CreatedAt:  b.CreatedAt().Format(time.RFC3339),
+	}
+}
+
+// mapEventLogToResponse конвертирует запись журнала в DTO ответа.
+func mapEventLogToResponse(l *models.EventLog) dto.EventLogResponse {
+	return dto.EventLogResponse{
+		ID:             l.ID(),
+		BookingID:      l.BookingID(),
+		NewStatus:      string(l.NewStatus()),
+		PreviousStatus: string(l.PreviousStatus()),
+		EventTimestamp: l.EventTimestamp().Format(time.RFC3339),
+		Cause:          l.Cause(),
+		InitiatedBy:    l.InitiatedBy(),
 	}
 }

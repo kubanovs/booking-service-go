@@ -77,4 +77,20 @@ const (
 		GROUP BY resource_id
 		ORDER BY COUNT(*) DESC, resource_id
 		LIMIT $3`
+
+	queryInsertBookingLog = `
+		INSERT INTO bookings_log (booking_id, new_status, previous_status, event_timestamp, cause, initiated_by)
+		VALUES ($1, $2, $3, $4, $5, $6)`
+
+	queryGetBookingLogsByBookingID = `
+		SELECT id, booking_id, new_status, previous_status, event_timestamp, cause, initiated_by
+		FROM bookings_log
+		WHERE booking_id = $1
+		ORDER BY event_timestamp DESC, id DESC
+		LIMIT $2 OFFSET $3`
+
+	queryCountBookingLogsByBookingID = `
+		SELECT COUNT(*)
+		FROM bookings_log
+		WHERE booking_id = $1`
 )

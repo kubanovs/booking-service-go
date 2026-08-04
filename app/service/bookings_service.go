@@ -1,16 +1,17 @@
 package service
 
 import (
+	"booking-service/app/models"
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"go.uber.org/zap"
 
 	"booking-service/app/api/dto"
 	"booking-service/app/messaging"
-	"booking-service/app/models"
 )
 
 // BookingsService обрабатывает команды (изменение состояния) для бронирований.
@@ -51,12 +52,14 @@ func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingReque
 		return 0, fmt.Errorf("некорректный формат endDate: %w", err)
 	}
 
-	booking, err := models.NewBooking(req.UserID, req.ResourceID, startDate, endDate)
+	b, err := models.NewBooking(req.UserID, req.ResourceID, startDate, endDate)
 	if err != nil {
 		return 0, err
 	}
 
-	id, err := s.repo.Create(ctx, booking)
+	initiatedBy := strconv.FormatInt(req.UserID, 10)
+
+	id, err := s.repo.CreateWithLog(ctx, b, initiatedBy)
 	if err != nil {
 		return 0, fmt.Errorf("сохранение бронирования: %w", err)
 	}
@@ -83,13 +86,17 @@ func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingReque
 
 // Cancel отменяет бронирование по ID.
 //
+// initiatedBy -- инициатор изменения для журнала. Пустая строка означает
+// пользовательскую отмену через HTTP (инициатором становится владелец брони);
+// автоматические вызовы (воркер, брокер) передают models.InitiatorSystem.
+//
 // Шаги:
 //  1. Загрузка бронирования из БД
 //  2. Вызов доменного метода StartCancel() (валидация перехода статуса)
-//  3. Сохранение обновлённого состояния
+//  3. Сохранение обновлённого состояния и записи журнала в одной транзакции
 //  4. Публикация команды в Catalog
-func (s *BookingsService) Cancel(ctx context.Context, id int64) error {
-	booking, err := s.repo.GetByID(ctx, id)
+func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy string) error {
+	b, err := s.repo.GetByID(ctx, id)
 	switch {
 	case errors.Is(err, models.ErrBookingNotFound):
 		s.logger.Warn("не найдено бронирование", zap.Int64("id", id), zap.Error(err))
@@ -98,11 +105,19 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64) error {
 		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
 	}
 
-	if err := booking.StartCancel(time.Now()); err != nil {
+	prev := b.Status()
+	if err := b.StartCancel(time.Now()); err != nil {
 		return err
 	}
 
-	if err := s.repo.Update(ctx, booking); err != nil {
+	// Пустой initiatedBy => пользовательская отмена: инициатор -- владелец брони.
+	if initiatedBy == "" {
+		initiatedBy = strconv.FormatInt(b.UserID(), 10)
+	}
+
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), initiatedBy, nil)
+
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 
@@ -119,7 +134,7 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64) error {
 }
 
 func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error {
-	booking, err := s.repo.GetByID(ctx, id)
+	b, err := s.repo.GetByID(ctx, id)
 
 	switch {
 	case errors.Is(err, models.ErrBookingNotFound):
@@ -129,30 +144,36 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
 	}
 
-	if err := booking.RollbackCancel(); err != nil {
+	prev := b.Status()
+	if err := b.RollbackCancel(); err != nil {
 		return err
 	}
 
-	if err := s.repo.Update(ctx, booking); err != nil {
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, nil)
+
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 
-	s.logger.Info(fmt.Sprintf("отмена бронирования отклонена, возвращён предыдущий статус: %s", booking.Status()), zap.Int64("id", id))
+	s.logger.Info(fmt.Sprintf("отмена бронирования отклонена, возвращён предыдущий статус: %s", b.Status()), zap.Int64("id", id))
 
 	return nil
 }
 
 func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) error {
-	booking, err := s.repo.GetByID(ctx, id)
+	b, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	if err := booking.FinishCancel(); err != nil {
+	prev := b.Status()
+	if err := b.FinishCancel(); err != nil {
 		return err
 	}
 
-	if err := s.repo.Update(ctx, booking); err != nil {
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, nil)
+
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 
@@ -164,22 +185,25 @@ func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) err
 // Confirm подтверждает бронирование по ID.
 // Используется обработчиком событий RabbitMQ.
 func (s *BookingsService) Confirm(ctx context.Context, id int64) error {
-	booking, err := s.repo.GetByID(ctx, id)
+	b, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	if booking.Status() == models.BookingStatusCancellationPending {
+	if b.Status() == models.BookingStatusCancellationPending {
 		s.logger.Warn("race condition: подтверждение брони в процессе отмены",
 			zap.Int64("id", id),
 		)
 	}
 
-	if err := booking.Confirm(); err != nil {
+	prev := b.Status()
+	if err := b.Confirm(); err != nil {
 		return err
 	}
 
-	if err := s.repo.Update(ctx, booking); err != nil {
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, nil)
+
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 

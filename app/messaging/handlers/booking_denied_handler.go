@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"booking-service/app/messaging"
+	"booking-service/app/models"
 	"booking-service/app/service"
 )
 
@@ -43,7 +44,7 @@ func (h *BookingDeniedHandler) Handle(ctx context.Context, body []byte) error {
 		zap.String("reason", event.Reason),
 	)
 
-	if err := h.service.Cancel(ctx, bookingID); err != nil {
+	if err := h.service.Cancel(ctx, bookingID, models.InitiatorSystem); err != nil {
 		return fmt.Errorf("отмена бронирования %d: %w", bookingID, err)
 	}
 

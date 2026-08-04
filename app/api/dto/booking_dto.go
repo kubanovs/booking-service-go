@@ -13,6 +13,13 @@ type CreateBookingResponse struct {
 	ID int64 `json:"id"`
 }
 
+// CancelBookingRequest -- запрос на отмену бронирования.
+// userId -- инициатор отмены (авторизации нет). Если не указан, инициатором
+// в журнале становится владелец брони.
+type CancelBookingRequest struct {
+	UserID int64 `json:"userId"`
+}
+
 // BookingResponse -- полные данные бронирования.
 type BookingResponse struct {
 	ID         int64  `json:"id"`
@@ -36,22 +43,6 @@ type GetBookingsByFilterRequest struct {
 	Status     *string `json:"status,omitempty"`
 	Page       int     `json:"page"`
 	Size       int     `json:"size"`
-}
-
-// PagedResponse -- ответ с пагинацией.
-type PagedResponse[T any] struct {
-	Items      []T   `json:"items"`
-	TotalCount int64 `json:"totalCount"`
-	Page       int   `json:"page"`
-	Size       int   `json:"size"`
-}
-
-// ProblemDetails -- стандартный формат ошибки RFC 7807.
-type ProblemDetails struct {
-	Type   string `json:"type"`
-	Title  string `json:"title"`
-	Status int    `json:"status"`
-	Detail string `json:"detail,omitempty"`
 }
 
 type BookingsStatistic struct {

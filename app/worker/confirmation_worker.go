@@ -1,13 +1,13 @@
 package worker
 
 import (
+	"booking-service/app/models"
 	"context"
 	"time"
 
 	"go.uber.org/zap"
 
 	"booking-service/app/clients/catalog"
-	"booking-service/app/models"
 	"booking-service/app/service"
 )
 
@@ -108,7 +108,7 @@ func (w *ConfirmationWorker) processBooking(ctx context.Context, booking *models
 		logger.Info("бронирование подтверждено через polling")
 
 	case "denied":
-		if err := w.service.Cancel(ctx, bookingID); err != nil {
+		if err := w.service.Cancel(ctx, bookingID, models.InitiatorSystem); err != nil {
 			logger.Error("ошибка отмены бронирования", zap.Error(err))
 			return
 		}
