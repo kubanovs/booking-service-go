@@ -44,14 +44,14 @@ func (r *BookingsRepository) CreateWithLog(ctx context.Context, b *models.Bookin
 	}
 
 	// Запись журнала о создании: предыдущего статуса нет (пустая строка),
-	// время события совпадает с моментом создания брони, причина отсутствует.
-	var noCause *string
+	// время события совпадает с моментом создания брони.
+	cause := models.CauseCreated
 	if _, err := tx.Exec(ctx, queryInsertBookingLog,
 		id,
 		string(b.Status()),
 		"",
 		b.CreatedAt(),
-		noCause,
+		cause,
 		initiatedBy,
 	); err != nil {
 		return 0, fmt.Errorf("запись в журнал о создании: %w", err)

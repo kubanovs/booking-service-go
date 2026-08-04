@@ -3,7 +3,6 @@ package service
 import (
 	"booking-service/app/models"
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -97,12 +96,8 @@ func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingReque
 //  4. Публикация команды в Catalog
 func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy string) error {
 	b, err := s.repo.GetByID(ctx, id)
-	switch {
-	case errors.Is(err, models.ErrBookingNotFound):
-		s.logger.Warn("не найдено бронирование", zap.Int64("id", id), zap.Error(err))
-		return nil
-	case err != nil:
-		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
+	if err != nil {
+		return err
 	}
 
 	prev := b.Status()
@@ -110,12 +105,16 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy stri
 		return err
 	}
 
-	// Пустой initiatedBy => пользовательская отмена: инициатор -- владелец брони.
-	if initiatedBy == "" {
+	// Причина зависит от инициатора: System => отказ Catalog, иначе пользовательский запрос.
+	cause := models.CauseUserRequest
+	if initiatedBy == models.InitiatorSystem {
+		cause = models.CauseCatalogDenied
+	} else if initiatedBy == "" {
+		// Пользовательская отмена без явного userId: инициатор -- владелец брони.
 		initiatedBy = strconv.FormatInt(b.UserID(), 10)
 	}
 
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), initiatedBy, nil)
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), initiatedBy, &cause)
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
@@ -135,13 +134,8 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy stri
 
 func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error {
 	b, err := s.repo.GetByID(ctx, id)
-
-	switch {
-	case errors.Is(err, models.ErrBookingNotFound):
-		s.logger.Warn("не найдено бронирование", zap.Int64("id", id), zap.Error(err))
-		return nil
-	case err != nil:
-		return fmt.Errorf("ошибка получения бронирования с id=%d: %w", id, err)
+	if err != nil {
+		return err
 	}
 
 	prev := b.Status()
@@ -149,7 +143,8 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 		return err
 	}
 
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, nil)
+	cause := models.CauseCancelFailed
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, &cause)
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
@@ -171,7 +166,8 @@ func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) err
 		return err
 	}
 
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, nil)
+	cause := models.CauseCancelConfirmed
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, &cause)
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
@@ -201,7 +197,8 @@ func (s *BookingsService) Confirm(ctx context.Context, id int64) error {
 		return err
 	}
 
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, nil)
+	cause := models.CauseCatalogConfirmed
+	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, &cause)
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
