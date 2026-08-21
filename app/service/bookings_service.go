@@ -2,63 +2,74 @@ package service
 
 import (
 	"booking-service/app/models"
+	"booking-service/app/utils"
 	"context"
 	"fmt"
 	"strconv"
-	"time"
 
+	"github.com/guregu/null/v5"
 	"go.uber.org/zap"
 
 	"booking-service/app/api/dto"
 	"booking-service/app/messaging"
 )
 
+type Repository interface {
+	CreateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog) (int64, error)
+	GetByID(ctx context.Context, id int64) (*models.Booking, error)
+	UpdateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog) error
+}
+
+type Publisher interface {
+	PublishCreateBookingJob(ctx context.Context, cmd messaging.CreateBookingJobCommand) error
+	PublishCancelBookingJob(ctx context.Context, cmd messaging.CancelBookingJobCommand) error
+}
+
 // BookingsService обрабатывает команды (изменение состояния) для бронирований.
 //
 // Этот сервис -- оркестратор: он координирует домен и репозиторий,
 // но НЕ содержит бизнес-правила (они в models.Booking).
 type BookingsService struct {
-	repo      models.BookingRepository
-	publisher *messaging.Publisher
+	repo      Repository
+	publisher Publisher
 	logger    *zap.Logger
+	clock     utils.Clock
 }
 
 // NewBookingsService создаёт новый BookingsService.
-func NewBookingsService(repo models.BookingRepository, publisher *messaging.Publisher, logger *zap.Logger) *BookingsService {
+func NewBookingsService(repo Repository, publisher Publisher, logger *zap.Logger, clock utils.Clock) *BookingsService {
 	return &BookingsService{
 		repo:      repo,
 		publisher: publisher,
 		logger:    logger,
+		clock:     clock,
 	}
 }
 
 // Create создаёт новое бронирование.
 //
 // Шаги:
-//  1. Парсинг дат из строкового формата
-//  2. Создание доменного объекта (валидация в конструкторе)
-//  3. Сохранение в БД
-//  4. Публикация команды в Catalog
-//  5. Возврат ID
+//  1. Создание доменного объекта (валидация в конструкторе)
+//  2. Сохранение в БД
+//  3. Публикация команды в Catalog
+//  4. Возврат ID
 func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingRequest) (int64, error) {
-	startDate, err := time.Parse(dto.DateFormat, req.StartDate)
-	if err != nil {
-		return 0, fmt.Errorf("некорректный формат startDate: %w", err)
-	}
+	now := s.clock.Now()
 
-	endDate, err := time.Parse(dto.DateFormat, req.EndDate)
-	if err != nil {
-		return 0, fmt.Errorf("некорректный формат endDate: %w", err)
-	}
-
-	b, err := models.NewBooking(req.UserID, req.ResourceID, startDate, endDate)
+	b, err := models.NewBooking(req.UserID, req.ResourceID, req.StartDate.Time, req.EndDate.Time, now)
 	if err != nil {
 		return 0, err
 	}
+	// BookingID проставит репозиторий сгенерированным id после вставки брони.
+	log := &models.EventLog{
+		NewStatus:      b.Status(),
+		PreviousStatus: null.Value[models.BookingStatus]{},
+		EventTimestamp: now,
+		Cause:          null.StringFrom(models.CauseCreated),
+		InitiatedBy:    strconv.FormatInt(req.UserID, 10),
+	}
 
-	initiatedBy := strconv.FormatInt(req.UserID, 10)
-
-	id, err := s.repo.CreateWithLog(ctx, b, initiatedBy)
+	id, err := s.repo.CreateWithLog(ctx, b, log)
 	if err != nil {
 		return 0, fmt.Errorf("сохранение бронирования: %w", err)
 	}
@@ -73,8 +84,8 @@ func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingReque
 		EventId:    messaging.NewMessageID(),
 		RequestId:  messaging.BookingIDToRequestID(id),
 		ResourceId: req.ResourceID,
-		StartDate:  req.StartDate,
-		EndDate:    req.EndDate,
+		StartDate:  req.StartDate.Format(dto.DateFormat),
+		EndDate:    req.EndDate.Format(dto.DateFormat),
 	}); err != nil {
 		s.logger.Error("ошибка публикации CreateBookingJob", zap.Error(err), zap.Int64("bookingId", id))
 		// Не возвращаем ошибку -- бронирование уже создано, команда может быть обработана позже
@@ -101,7 +112,7 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy stri
 	}
 
 	prev := b.Status()
-	if err := b.StartCancel(time.Now()); err != nil {
+	if err := b.StartCancel(s.clock.Now()); err != nil {
 		return err
 	}
 
@@ -109,12 +120,16 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy stri
 	cause := models.CauseUserRequest
 	if initiatedBy == models.InitiatorSystem {
 		cause = models.CauseCatalogDenied
-	} else if initiatedBy == "" {
-		// Пользовательская отмена без явного userId: инициатор -- владелец брони.
-		initiatedBy = strconv.FormatInt(b.UserID(), 10)
 	}
 
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), initiatedBy, &cause)
+	logEntry := &models.EventLog{
+		BookingID:      b.ID(),
+		NewStatus:      b.Status(),
+		PreviousStatus: null.ValueFrom(prev),
+		EventTimestamp: s.clock.Now(),
+		Cause:          null.StringFrom(cause),
+		InitiatedBy:    initiatedBy,
+	}
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
@@ -144,7 +159,14 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 	}
 
 	cause := models.CauseCancelFailed
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, &cause)
+	logEntry := &models.EventLog{
+		BookingID:      b.ID(),
+		NewStatus:      b.Status(),
+		PreviousStatus: null.ValueFrom(prev),
+		EventTimestamp: s.clock.Now(),
+		Cause:          null.StringFrom(cause),
+		InitiatedBy:    models.InitiatorSystem,
+	}
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
@@ -167,7 +189,14 @@ func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) err
 	}
 
 	cause := models.CauseCancelConfirmed
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, &cause)
+	logEntry := &models.EventLog{
+		BookingID:      b.ID(),
+		NewStatus:      b.Status(),
+		PreviousStatus: null.ValueFrom(prev),
+		EventTimestamp: s.clock.Now(),
+		Cause:          null.StringFrom(cause),
+		InitiatedBy:    models.InitiatorSystem,
+	}
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
@@ -198,7 +227,14 @@ func (s *BookingsService) Confirm(ctx context.Context, id int64) error {
 	}
 
 	cause := models.CauseCatalogConfirmed
-	logEntry := models.RecordEventLog(b.ID(), prev, b.Status(), models.InitiatorSystem, &cause)
+	logEntry := &models.EventLog{
+		BookingID:      b.ID(),
+		NewStatus:      b.Status(),
+		PreviousStatus: null.ValueFrom(prev),
+		EventTimestamp: s.clock.Now(),
+		Cause:          null.StringFrom(cause),
+		InitiatedBy:    models.InitiatorSystem,
+	}
 
 	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)

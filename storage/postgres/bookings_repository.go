@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/guregu/null/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -23,7 +24,7 @@ func NewBookingsRepository(pool *pgxpool.Pool) *BookingsRepository {
 
 // CreateWithLog сохраняет новое бронирование и запись журнала о создании
 // в рамках одной транзакции: либо создаётся всё, либо ничего.
-func (r *BookingsRepository) CreateWithLog(ctx context.Context, b *models.Booking, initiatedBy string) (int64, error) {
+func (r *BookingsRepository) CreateWithLog(ctx context.Context, b *models.Booking, log *models.EventLog) (int64, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("старт транзакции: %w", err)
@@ -43,16 +44,13 @@ func (r *BookingsRepository) CreateWithLog(ctx context.Context, b *models.Bookin
 		return 0, fmt.Errorf("создание бронирования: %w", err)
 	}
 
-	// Запись журнала о создании: предыдущего статуса нет (пустая строка),
-	// время события совпадает с моментом создания брони.
-	cause := models.CauseCreated
 	if _, err := tx.Exec(ctx, queryInsertBookingLog,
-		id,
-		string(b.Status()),
-		"",
-		b.CreatedAt(),
-		cause,
-		initiatedBy,
+		id, // booking_id: сгенерированный id только что созданной брони
+		string(log.NewStatus),
+		log.PreviousStatus,
+		log.EventTimestamp,
+		log.Cause,
+		log.InitiatedBy,
 	); err != nil {
 		return 0, fmt.Errorf("запись в журнал о создании: %w", err)
 	}
@@ -246,8 +244,8 @@ func scanBookingRow(scan func(dest ...any) error) (*models.Booking, error) {
 		startDate    time.Time
 		endDate      time.Time
 		createdAt    time.Time
-		statusBefore *string    // nullable
-		cancelTS     *time.Time // nullable
+		statusBefore null.String // nullable
+		cancelTS     null.Time   // nullable
 	)
 
 	err := scan(&id, &status, &userID, &resourceID, &startDate, &endDate, &createdAt,
@@ -256,15 +254,9 @@ func scanBookingRow(scan func(dest ...any) error) (*models.Booking, error) {
 		return nil, err
 	}
 
-	var sb *models.BookingStatus
-	if statusBefore != nil {
-		v := models.BookingStatus(*statusBefore)
-		sb = &v
-	}
-
 	return models.RestoreBooking(
 		id, models.BookingStatus(status), userID, resourceID,
-		startDate, endDate, createdAt, sb, cancelTS,
+		startDate, endDate, createdAt, statusBefore, cancelTS,
 	), nil
 }
 
@@ -277,15 +269,9 @@ func (r *BookingsRepository) UpdateWithLog(ctx context.Context, b *models.Bookin
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // откат: no-op после успешного Commit
 
-	var statusBefore *string
-	if s := b.StatusBeforeCancellation(); s != nil {
-		v := string(*s)
-		statusBefore = &v
-	}
-
 	tag, err := tx.Exec(ctx, queryUpdateBooking,
 		string(b.Status()),
-		statusBefore,
+		b.StatusBeforeCancellation(),
 		b.RequestCancellationTimestamp(),
 		b.UserID(),
 		b.ResourceID(),
@@ -301,12 +287,12 @@ func (r *BookingsRepository) UpdateWithLog(ctx context.Context, b *models.Bookin
 	}
 
 	if _, err := tx.Exec(ctx, queryInsertBookingLog,
-		log.BookingID(),
-		string(log.NewStatus()),
-		string(log.PreviousStatus()),
-		log.EventTimestamp(),
-		log.Cause(),
-		log.InitiatedBy(),
+		log.BookingID,
+		string(log.NewStatus),
+		log.PreviousStatus,
+		log.EventTimestamp,
+		log.Cause,
+		log.InitiatedBy,
 	); err != nil {
 		return fmt.Errorf("запись в журнал: %w", err)
 	}
@@ -347,23 +333,23 @@ func (r *BookingsRepository) GetLogsByBookingID(ctx context.Context, bookingID i
 
 	logs, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (models.EventLog, error) {
 		var (
-			id          int64
-			bID         int64
-			newStatus   string
-			prevStatus  string
-			eventTS     time.Time
-			cause       *string
-			initiatedBy string
+			log       models.EventLog
+			newStatus string
 		)
-		if err := row.Scan(&id, &bID, &newStatus, &prevStatus, &eventTS, &cause, &initiatedBy); err != nil {
+		if err := row.Scan(
+			&log.Id,
+			&log.BookingID,
+			&newStatus,
+			&log.PreviousStatus,
+			&log.EventTimestamp,
+			&log.Cause,
+			&log.InitiatedBy,
+		); err != nil {
 			return models.EventLog{}, err
 		}
-		return *models.NewEventLog(
-			id, bID,
-			models.BookingStatus(newStatus),
-			models.BookingStatus(prevStatus),
-			eventTS, cause, initiatedBy,
-		), nil
+		log.NewStatus = models.BookingStatus(newStatus)
+
+		return log, nil
 	})
 	if err != nil {
 		return nil, 0, fmt.Errorf("сканирование записей журнала: %w", err)

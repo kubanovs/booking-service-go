@@ -9,7 +9,7 @@ import (
 type BookingRepository interface {
 	// CreateWithLog сохраняет новое бронирование и запись журнала о создании
 	// в рамках одной транзакции. Возвращает присвоенный ID.
-	CreateWithLog(ctx context.Context, booking *Booking, initiatedBy string) (int64, error)
+	CreateWithLog(ctx context.Context, booking *Booking, log *EventLog) (int64, error)
 
 	// GetByID возвращает бронирование по ID.
 	GetByID(ctx context.Context, id int64) (*Booking, error)

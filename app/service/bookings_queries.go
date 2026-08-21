@@ -11,9 +11,18 @@ import (
 	"booking-service/app/api/dto"
 )
 
+type ReaderRepository interface {
+	GetByID(ctx context.Context, id int64) (*models.Booking, error)
+	GetByFilter(ctx context.Context, filter models.BookingFilter) ([]models.Booking, int64, error)
+	GetLogsByBookingID(ctx context.Context, bookingID int64, page, size int) ([]models.EventLog, int64, error)
+	CountBookingsForPeriod(ctx context.Context, from, to time.Time) (int, error)
+	GetStatusCountsForPeriod(ctx context.Context, from, to time.Time) (map[string]int, error)
+	GetTopResourcesForPeriod(ctx context.Context, limit int, from, to time.Time) ([]int, error)
+}
+
 // BookingsQueries обрабатывает запросы (чтение данных) для бронирований.
 type BookingsQueries struct {
-	repo   models.BookingRepository
+	repo   ReaderRepository
 	logger *zap.Logger
 }
 
@@ -161,12 +170,12 @@ func mapBookingToResponse(b *models.Booking) dto.BookingResponse {
 // mapEventLogToResponse конвертирует запись журнала в DTO ответа.
 func mapEventLogToResponse(l *models.EventLog) dto.EventLogResponse {
 	return dto.EventLogResponse{
-		ID:             l.ID(),
-		BookingID:      l.BookingID(),
-		NewStatus:      string(l.NewStatus()),
-		PreviousStatus: string(l.PreviousStatus()),
-		EventTimestamp: l.EventTimestamp().Format(time.RFC3339),
-		Cause:          l.Cause(),
-		InitiatedBy:    l.InitiatedBy(),
+		ID:             l.Id,
+		BookingID:      l.BookingID,
+		NewStatus:      string(l.NewStatus),
+		PreviousStatus: string(l.PreviousStatus.V), // "" если NULL (событие создания)
+		EventTimestamp: l.EventTimestamp.Format(time.RFC3339),
+		Cause:          l.Cause.Ptr(),
+		InitiatedBy:    l.InitiatedBy,
 	}
 }

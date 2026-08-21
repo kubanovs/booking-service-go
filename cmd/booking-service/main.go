@@ -1,6 +1,7 @@
 package main
 
 import (
+	"booking-service/app/utils"
 	"booking-service/app/worker"
 	"context"
 	"errors"
@@ -31,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := setupLogger(cfg.App.LogLevel)
+	logger := setupLogger(cfg.App.LogLevel, cfg.App.Environment)
 	defer func() { _ = logger.Sync() }()
 	zap.ReplaceGlobals(logger)
 
@@ -65,7 +66,7 @@ func main() {
 	publisher := messaging.NewPublisher(mqConn, cfg.RabbitMQ.ExchangeName, cfg.RabbitMQ.PublisherExchangeName, logger)
 
 	// Сервисный слой
-	bookingsService := service.NewBookingsService(repo, publisher, logger)
+	bookingsService := service.NewBookingsService(repo, publisher, logger, &utils.RealClock{})
 	bookingsQueries := service.NewBookingsQueries(repo, logger)
 
 	// Catalog-клиент
@@ -150,7 +151,7 @@ func main() {
 	logger.Info("сервис остановлен")
 }
 
-func setupLogger(level string) *zap.Logger {
+func setupLogger(level, env string) *zap.Logger {
 	var zapLevel zapcore.Level
 	switch level {
 	case "debug":
@@ -165,8 +166,21 @@ func setupLogger(level string) *zap.Logger {
 		zapLevel = zapcore.InfoLevel
 	}
 
-	cfg := zap.NewProductionConfig()
+	var cfg zap.Config
+	if env == "production" {
+		// В production — структурированный JSON для сбора в системах логирования.
+		cfg = zap.NewProductionConfig()
+	} else {
+		// Локально — человекочитаемый цветной вывод в консоль.
+		cfg = zap.NewDevelopmentConfig()
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("15:04:05.000")
+		// Пишем в stdout, иначе IDE красит весь вывод stderr в красный.
+		cfg.OutputPaths = []string{"stdout"}
+		cfg.ErrorOutputPaths = []string{"stdout"}
+	}
 	cfg.Level.SetLevel(zapLevel)
+
 	logger, _ := cfg.Build()
 	return logger
 }

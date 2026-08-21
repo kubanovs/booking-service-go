@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/guregu/null/v5"
+)
 
 // BookingStatus представляет статус бронирования.
 type BookingStatus string
@@ -37,36 +41,42 @@ func (s BookingStatus) IsValid() bool {
 type Booking struct {
 	id                           int64
 	status                       BookingStatus
-	statusBeforeCancellation     *BookingStatus // nil, если бронь не в процессе отмены
+	statusBeforeCancellation     null.String // NULL, если бронь не в процессе отмены
 	userID                       int64
 	resourceID                   int64
 	startDate                    time.Time
 	endDate                      time.Time
 	createdAt                    time.Time
-	requestCancellationTimestamp *time.Time // nil, если бронь не в процессе отмены
+	requestCancellationTimestamp null.Time // NULL, если бронь не в процессе отмены
 }
 
-func (b *Booking) ID() int64                                { return b.id }
-func (b *Booking) Status() BookingStatus                    { return b.status }
-func (b *Booking) UserID() int64                            { return b.userID }
-func (b *Booking) ResourceID() int64                        { return b.resourceID }
-func (b *Booking) StartDate() time.Time                     { return b.startDate }
-func (b *Booking) EndDate() time.Time                       { return b.endDate }
-func (b *Booking) CreatedAt() time.Time                     { return b.createdAt }
-func (b *Booking) StatusBeforeCancellation() *BookingStatus { return b.statusBeforeCancellation }
-func (b *Booking) RequestCancellationTimestamp() *time.Time { return b.requestCancellationTimestamp }
+func (b *Booking) ID() int64             { return b.id }
+func (b *Booking) Status() BookingStatus { return b.status }
+func (b *Booking) UserID() int64         { return b.userID }
+func (b *Booking) ResourceID() int64     { return b.resourceID }
+func (b *Booking) StartDate() time.Time  { return b.startDate }
+func (b *Booking) EndDate() time.Time    { return b.endDate }
+func (b *Booking) CreatedAt() time.Time  { return b.createdAt }
+func (b *Booking) StatusBeforeCancellation() null.String {
+	return b.statusBeforeCancellation
+}
+func (b *Booking) RequestCancellationTimestamp() null.Time {
+	return b.requestCancellationTimestamp
+}
 
 // NewBooking создаёт новое бронирование в статусе AwaitsConfirmation.
-func NewBooking(userID, resourceID int64, startDate, endDate time.Time) (*Booking, error) {
+func NewBooking(userID, resourceID int64, startDate, endDate time.Time, now time.Time) (*Booking, error) {
 	if userID <= 0 {
 		return nil, ErrInvalidUserID
 	}
 	if resourceID <= 0 {
 		return nil, ErrInvalidResourceID
 	}
-	if startDate.IsZero() || endDate.IsZero() {
+
+	if startDate.Before(now) {
 		return nil, ErrInvalidDateRange
 	}
+
 	if !endDate.After(startDate) {
 		return nil, ErrEndDateBeforeStartDate
 	}
@@ -77,7 +87,7 @@ func NewBooking(userID, resourceID int64, startDate, endDate time.Time) (*Bookin
 		resourceID: resourceID,
 		startDate:  startDate,
 		endDate:    endDate,
-		createdAt:  time.Now(),
+		createdAt:  now,
 	}, nil
 }
 
@@ -88,8 +98,8 @@ func (b *Booking) Confirm() error {
 		return ErrInvalidStatusTransition
 	}
 	b.status = BookingStatusConfirmed
-	b.statusBeforeCancellation = nil
-	b.requestCancellationTimestamp = nil
+	b.statusBeforeCancellation = null.String{}
+	b.requestCancellationTimestamp = null.Time{}
 	return nil
 }
 
@@ -117,25 +127,23 @@ func (b *Booking) StartCancel(today time.Time) error {
 
 // beginCancellation запоминает текущий статус и момент запроса,
 // затем переводит бронь в промежуточный статус CancellationPending.
-func (b *Booking) beginCancellation(today time.Time) {
-	prev := b.status
-	t := today
-	b.statusBeforeCancellation = &prev
-	b.requestCancellationTimestamp = &t
+func (b *Booking) beginCancellation(now time.Time) {
+	b.statusBeforeCancellation = null.StringFrom(string(b.status))
+	b.requestCancellationTimestamp = null.TimeFrom(now)
 	b.status = BookingStatusCancellationPending
 }
 
 // RollbackCancel откатывает статус CancellationPending к предыдущему.
-// Метаданные отмены сбрасываются в nil (в БД -> NULL): бронь снова активна.
+// Метаданные отмены сбрасываются в NULL: бронь снова активна.
 func (b *Booking) RollbackCancel() error {
 	switch b.status {
 	case BookingStatusCancellationPending:
-		if b.statusBeforeCancellation == nil {
+		if !b.statusBeforeCancellation.Valid {
 			return ErrInvalidStatusTransition
 		}
-		b.status = *b.statusBeforeCancellation
-		b.statusBeforeCancellation = nil
-		b.requestCancellationTimestamp = nil
+		b.status = BookingStatus(b.statusBeforeCancellation.String)
+		b.statusBeforeCancellation = null.String{}
+		b.requestCancellationTimestamp = null.Time{}
 		return nil
 	default:
 		return ErrInvalidStatusTransition
@@ -147,8 +155,8 @@ func (b *Booking) FinishCancel() error {
 	switch b.status {
 	case BookingStatusCancellationPending:
 		b.status = BookingStatusCancelled
-		b.statusBeforeCancellation = nil
-		b.requestCancellationTimestamp = nil
+		b.statusBeforeCancellation = null.String{}
+		b.requestCancellationTimestamp = null.Time{}
 		return nil
 	default:
 		return ErrInvalidStatusTransition
@@ -162,8 +170,8 @@ func RestoreBooking(
 	status BookingStatus,
 	userID, resourceID int64,
 	startDate, endDate, createdAt time.Time,
-	statusBeforeCancellation *BookingStatus,
-	requestCancellationTimestamp *time.Time,
+	statusBeforeCancellation null.String,
+	requestCancellationTimestamp null.Time,
 ) *Booking {
 	return &Booking{
 		id:                           id,

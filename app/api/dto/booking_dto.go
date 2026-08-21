@@ -2,10 +2,10 @@ package dto
 
 // CreateBookingRequest -- запрос на создание бронирования.
 type CreateBookingRequest struct {
-	UserID     int64  `json:"userId"`
-	ResourceID int64  `json:"resourceId"`
-	StartDate  string `json:"startDate"` // формат: "2006-01-02"
-	EndDate    string `json:"endDate"`   // формат: "2006-01-02"
+	UserID     int64 `json:"userId"`
+	ResourceID int64 `json:"resourceId"`
+	StartDate  Date  `json:"startDate"` // формат: "2006-01-02"
+	EndDate    Date  `json:"endDate"`   // формат: "2006-01-02"
 }
 
 // CreateBookingResponse -- ответ при создании бронирования.

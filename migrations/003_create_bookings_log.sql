@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS bookings_log (
     id BIGSERIAL PRIMARY KEY,
     booking_id BIGINT NOT NULL,
     new_status VARCHAR(30) NOT NULL,
-    previous_status VARCHAR(30) NOT NULL,
+    previous_status VARCHAR(30),
     event_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     cause VARCHAR(50),
     initiated_by VARCHAR(30) NOT NULL

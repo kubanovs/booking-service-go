@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/guregu/null/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -13,11 +14,12 @@ func TestNewBooking_Success(t *testing.T) {
 	// Arrange
 	userID := int64(1)
 	resourceID := int64(10)
-	startDate := time.Now().AddDate(0, 0, 7)
-	endDate := time.Now().AddDate(0, 0, 14)
+	now := time.Now()
+	startDate := now.AddDate(0, 0, 7)
+	endDate := now.AddDate(0, 0, 14)
 
 	// Act
-	b, err := models.NewBooking(userID, resourceID, startDate, endDate)
+	b, err := models.NewBooking(userID, resourceID, startDate, endDate, now)
 
 	// Assert
 	require.NoError(t, err)
@@ -27,14 +29,24 @@ func TestNewBooking_Success(t *testing.T) {
 }
 
 func TestNewBooking_InvalidUserID(t *testing.T) {
-	_, err := models.NewBooking(0, 10, time.Now(), time.Now().AddDate(0, 0, 1))
+	now := time.Now()
+	_, err := models.NewBooking(0, 10, now.AddDate(0, 0, 1), now.AddDate(0, 0, 2), now)
 	assert.ErrorIs(t, err, models.ErrInvalidUserID)
 }
 
+func TestNewBooking_PastStartDate(t *testing.T) {
+	now := time.Now()
+	start := now.AddDate(0, 0, -1)
+	end := now.AddDate(0, 0, 7)
+	_, err := models.NewBooking(1, 10, start, end, now)
+	assert.ErrorIs(t, err, models.ErrInvalidDateRange)
+}
+
 func TestNewBooking_EndDateBeforeStartDate(t *testing.T) {
-	start := time.Now().AddDate(0, 0, 7)
-	end := time.Now().AddDate(0, 0, 1)
-	_, err := models.NewBooking(1, 10, start, end)
+	now := time.Now()
+	start := now.AddDate(0, 0, 7)
+	end := now.AddDate(0, 0, 1)
+	_, err := models.NewBooking(1, 10, start, end, now)
 	assert.ErrorIs(t, err, models.ErrEndDateBeforeStartDate)
 }
 
@@ -84,8 +96,8 @@ func TestCancel_FromConfirmed_PastStartDate_Error(t *testing.T) {
 		time.Now().AddDate(0, 0, -3),
 		time.Now().AddDate(0, 0, -1),
 		time.Now().AddDate(0, 0, -5),
-		nil,
-		nil,
+		null.String{},
+		null.Time{},
 	)
 
 	err := b.StartCancel(time.Now())
@@ -139,7 +151,8 @@ func TestRollbackCancel_FromOtherStatus(t *testing.T) {
 
 func createTestBooking(t *testing.T) *models.Booking {
 	t.Helper()
-	b, err := models.NewBooking(1, 10, time.Now().AddDate(0, 0, 7), time.Now().AddDate(0, 0, 14))
+	now := time.Now()
+	b, err := models.NewBooking(1, 10, now.AddDate(0, 0, 7), now.AddDate(0, 0, 14), now)
 	require.NoError(t, err)
 	return b
 }
@@ -156,7 +169,7 @@ func createTestBookingCancelStarted() *models.Booking {
 		time.Now().AddDate(0, 0, 7),
 		time.Now().AddDate(0, 0, 14),
 		time.Now(),
-		&statusBeforeCancellation,
-		&cancellationReqTime,
+		null.StringFrom(string(statusBeforeCancellation)),
+		null.TimeFrom(cancellationReqTime),
 	)
 }
