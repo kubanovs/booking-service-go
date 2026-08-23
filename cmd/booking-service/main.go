@@ -1,6 +1,8 @@
 package main
 
 import (
+	"booking-service/app/utils"
+	"booking-service/app/worker"
 	"context"
 	"errors"
 	"fmt"
@@ -30,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger := setupLogger(cfg.App.LogLevel)
+	logger := setupLogger(cfg.App.LogLevel, cfg.App.Environment)
 	defer func() { _ = logger.Sync() }()
 	zap.ReplaceGlobals(logger)
 
@@ -64,7 +66,7 @@ func main() {
 	publisher := messaging.NewPublisher(mqConn, cfg.RabbitMQ.ExchangeName, cfg.RabbitMQ.PublisherExchangeName, logger)
 
 	// Сервисный слой
-	bookingsService := service.NewBookingsService(repo, publisher, logger)
+	bookingsService := service.NewBookingsService(repo, publisher, logger, &utils.RealClock{})
 	bookingsQueries := service.NewBookingsQueries(repo, logger)
 
 	// Catalog-клиент
@@ -80,6 +82,8 @@ func main() {
 	// Хендлеры событий RabbitMQ
 	confirmedHandler := handlers.NewBookingConfirmedHandler(bookingsService, logger)
 	deniedHandler := handlers.NewBookingDeniedHandler(bookingsService, logger)
+	cancelErrorHandler := handlers.NewCancelBookingErrorHandler(bookingsService, logger)
+	cancelConfirmHandler := handlers.NewCancelBookingConfirmationHandler(bookingsService, logger)
 
 	// Контекст для graceful shutdown фоновых задач
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,11 +93,23 @@ func main() {
 	consumer := messaging.NewConsumer(mqConn, cfg.RabbitMQ.ExchangeName, cfg.RabbitMQ.QueuePrefix, logger)
 	consumer.Subscribe(messaging.QueueSuffixBookingJobConfirmed, messaging.RoutingKeyBookingJobConfirmed, confirmedHandler.Handle)
 	consumer.Subscribe(messaging.QueueSuffixBookingJobDenied, messaging.RoutingKeyBookingJobDenied, deniedHandler.Handle)
+	consumer.Subscribe(messaging.QueueSuffixBookingJobCancelError, messaging.RoutingKeyCancelBookingError, cancelErrorHandler.Handle)
+	consumer.Subscribe(messaging.QueueSuffixBookingJobCancelConfirmation, messaging.RoutingKeyCancelBookingConfirmation, cancelConfirmHandler.Handle)
 
 	if err := consumer.Start(ctx); err != nil {
 		logger.Error("не удалось запустить consumer", zap.Error(err))
 		os.Exit(1)
 	}
+
+	cancellationWorker := worker.NewCancellationWorker(
+		publisher,
+		repo,
+		cfg.CancellationWorker.CancellationInterval,
+		cfg.CancellationWorker.CancellationBatch,
+		cfg.CancellationWorker.CancellationAwaitingTimeout,
+		logger,
+	)
+	go cancellationWorker.Run(ctx)
 
 	// HTTP-хендлеры и роутер
 	bookingsHandler := handler.NewBookingsHandler(bookingsService, bookingsQueries, logger)
@@ -135,7 +151,7 @@ func main() {
 	logger.Info("сервис остановлен")
 }
 
-func setupLogger(level string) *zap.Logger {
+func setupLogger(level, env string) *zap.Logger {
 	var zapLevel zapcore.Level
 	switch level {
 	case "debug":
@@ -150,8 +166,21 @@ func setupLogger(level string) *zap.Logger {
 		zapLevel = zapcore.InfoLevel
 	}
 
-	cfg := zap.NewProductionConfig()
+	var cfg zap.Config
+	if env == "production" {
+		// В production — структурированный JSON для сбора в системах логирования.
+		cfg = zap.NewProductionConfig()
+	} else {
+		// Локально — человекочитаемый цветной вывод в консоль.
+		cfg = zap.NewDevelopmentConfig()
+		cfg.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		cfg.EncoderConfig.EncodeTime = zapcore.TimeEncoderOfLayout("15:04:05.000")
+		// Пишем в stdout, иначе IDE красит весь вывод stderr в красный.
+		cfg.OutputPaths = []string{"stdout"}
+		cfg.ErrorOutputPaths = []string{"stdout"}
+	}
 	cfg.Level.SetLevel(zapLevel)
+
 	logger, _ := cfg.Build()
 	return logger
 }

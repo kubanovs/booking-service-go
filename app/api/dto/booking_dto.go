@@ -2,15 +2,22 @@ package dto
 
 // CreateBookingRequest -- запрос на создание бронирования.
 type CreateBookingRequest struct {
-	UserID     int64  `json:"userId"`
-	ResourceID int64  `json:"resourceId"`
-	StartDate  string `json:"startDate"` // формат: "2006-01-02"
-	EndDate    string `json:"endDate"`   // формат: "2006-01-02"
+	UserID     int64 `json:"userId"`
+	ResourceID int64 `json:"resourceId"`
+	StartDate  Date  `json:"startDate"` // формат: "2006-01-02"
+	EndDate    Date  `json:"endDate"`   // формат: "2006-01-02"
 }
 
 // CreateBookingResponse -- ответ при создании бронирования.
 type CreateBookingResponse struct {
 	ID int64 `json:"id"`
+}
+
+// CancelBookingRequest -- запрос на отмену бронирования.
+// userId -- инициатор отмены (авторизации нет). Если не указан, инициатором
+// в журнале становится владелец брони.
+type CancelBookingRequest struct {
+	UserID int64 `json:"userId"`
 }
 
 // BookingResponse -- полные данные бронирования.
@@ -38,20 +45,10 @@ type GetBookingsByFilterRequest struct {
 	Size       int     `json:"size"`
 }
 
-// PagedResponse -- ответ с пагинацией.
-type PagedResponse[T any] struct {
-	Items      []T   `json:"items"`
-	TotalCount int64 `json:"totalCount"`
-	Page       int   `json:"page"`
-	Size       int   `json:"size"`
-}
-
-// ProblemDetails -- стандартный формат ошибки RFC 7807.
-type ProblemDetails struct {
-	Type   string `json:"type"`
-	Title  string `json:"title"`
-	Status int    `json:"status"`
-	Detail string `json:"detail,omitempty"`
+type BookingsStatistic struct {
+	Total                int            `json:"total"`
+	DistributionByStatus map[string]int `json:"distributionByStatus"`
+	TopResources         []int          `json:"topResources"`
 }
 
 // DateFormat -- формат даты для JSON-сериализации.

@@ -1,23 +1,26 @@
 package handler
 
 import (
+	"booking-service/app/models"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"go.uber.org/zap"
 
 	"booking-service/app/api/dto"
-	"booking-service/app/models"
 )
 
 // BookingService определяет командные операции с бронированиями.
 type BookingService interface {
 	Create(ctx context.Context, req dto.CreateBookingRequest) (int64, error)
-	Cancel(ctx context.Context, id int64) error
+	// Cancel вызывается из HTTP -- это не событие брокера, поэтому eventID пуст.
+	Cancel(ctx context.Context, id int64, initiatedBy, eventID string) error
 }
 
 // BookingQueries определяет операции чтения бронирований.
@@ -25,6 +28,8 @@ type BookingQueries interface {
 	GetByID(ctx context.Context, id int64) (dto.BookingResponse, error)
 	GetByFilter(ctx context.Context, req dto.GetBookingsByFilterRequest) (dto.PagedResponse[dto.BookingResponse], error)
 	GetStatus(ctx context.Context, id int64) (models.BookingStatus, error)
+	CalcStatistic(ctx context.Context, dateFrom time.Time, dateTo time.Time) (dto.BookingsStatistic, error)
+	GetHistory(ctx context.Context, bookingID int64, page, size int) (dto.PagedResponse[dto.EventLogResponse], error)
 }
 
 // BookingsHandler содержит обработчики HTTP-запросов для бронирований.
@@ -85,7 +90,20 @@ func (h *BookingsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.Cancel(r.Context(), id); err != nil {
+	// Тело с userId опционально. Пустое тело (io.EOF) допустимо: тогда
+	// initiatedBy остаётся пустым и сервис атрибутирует отмену владельцу брони.
+	var req dto.CancelBookingRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeProblemDetails(w, http.StatusBadRequest, "Некорректный формат запроса", err.Error())
+		return
+	}
+
+	initiatedBy := ""
+	if req.UserID > 0 {
+		initiatedBy = strconv.FormatInt(req.UserID, 10)
+	}
+
+	if err := h.service.Cancel(r.Context(), id, initiatedBy, ""); err != nil {
 		h.handleServiceError(w, err)
 		return
 	}
@@ -127,6 +145,52 @@ func (h *BookingsHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, dto.BookingStatusResponse{Status: string(status)})
 }
 
+// GetHistory обрабатывает GET /api/bookings/{id}/history.
+func (h *BookingsHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseIDParam(r)
+	if err != nil {
+		writeProblemDetails(w, http.StatusBadRequest, "Некорректный ID", err.Error())
+		return
+	}
+
+	page, size := parsePagination(r)
+
+	result, err := h.queries.GetHistory(r.Context(), id, page, size)
+	if err != nil {
+		h.handleServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *BookingsHandler) CalcStatistic(w http.ResponseWriter, r *http.Request) {
+	dateFrom, err := parseDateParam(r, "dateFrom")
+	if err != nil {
+		writeProblemDetails(w, http.StatusBadRequest, "Некорректный dateFrom", err.Error())
+		return
+	}
+
+	dateTo, err := parseDateParam(r, "dateTo")
+	if err != nil {
+		writeProblemDetails(w, http.StatusBadRequest, "Некорректный dateTo", err.Error())
+		return
+	}
+
+	if dateFrom.After(dateTo) {
+		writeProblemDetails(w, http.StatusBadRequest, "dateFrom позже чем dateTo", "")
+	}
+
+	stats, err := h.queries.CalcStatistic(r.Context(), dateFrom, dateTo)
+
+	if err != nil {
+		h.handleServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, stats)
+}
+
 // handleServiceError маппит доменные ошибки на HTTP-ответы.
 func (h *BookingsHandler) handleServiceError(w http.ResponseWriter, err error) {
 	switch {
@@ -152,6 +216,28 @@ func (h *BookingsHandler) handleServiceError(w http.ResponseWriter, err error) {
 func parseIDParam(r *http.Request) (int64, error) {
 	idStr := chi.URLParam(r, "id")
 	return strconv.ParseInt(idStr, 10, 64)
+}
+
+func parseDateParam(r *http.Request, dateFieldName string) (time.Time, error) {
+	dateStr := r.URL.Query().Get(dateFieldName)
+	return time.Parse(dto.DateFormat, dateStr)
+}
+
+// parsePagination читает параметры пагинации из query-строки (?page=&size=).
+// Значения по умолчанию: page=1, size=25. Размер страницы ограничен сверху 100.
+func parsePagination(r *http.Request) (page, size int) {
+	page, size = 1, 25
+	if v := r.URL.Query().Get("page"); v != "" {
+		if p, err := strconv.Atoi(v); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if v := r.URL.Query().Get("size"); v != "" {
+		if s, err := strconv.Atoi(v); err == nil && s > 0 {
+			size = min(s, 100)
+		}
+	}
+	return page, size
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

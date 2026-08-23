@@ -61,19 +61,19 @@ services:
       timeout: 10s
       retries: 3
 
-  booking-host:
-    build:
-      context: ../..
-      dockerfile: dev/deployments/Dockerfile
-    ports:
-      - "8081:8080"
-    env_file:
-      - compose.dev.env
-    depends_on:
-      booking-db:
-        condition: service_started
-      rabbitmq:
-        condition: service_healthy
+#  booking-host:
+#    build:
+#      context: ../..
+#      dockerfile: dev/deployments/Dockerfile
+#    ports:
+#      - "8081:8080"
+#    env_file:
+#      - compose.dev.env
+#    depends_on:
+#      booking-db:
+#        condition: service_started
+#      rabbitmq:
+#        condition: service_healthy
 
   booking-db:
     image: postgres:16-alpine
