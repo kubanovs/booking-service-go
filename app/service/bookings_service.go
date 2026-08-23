@@ -17,7 +17,8 @@ import (
 type Repository interface {
 	CreateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog) (int64, error)
 	GetByID(ctx context.Context, id int64) (*models.Booking, error)
-	UpdateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog) error
+	IsEventProcessed(ctx context.Context, eventID string) (bool, error)
+	UpdateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog, eventID string) error
 }
 
 type Publisher interface {
@@ -44,6 +45,25 @@ func NewBookingsService(repo Repository, publisher Publisher, logger *zap.Logger
 		logger:    logger,
 		clock:     clock,
 	}
+}
+
+// ensureNotProcessed возвращает ErrEventAlreadyProcessed, если событие с данным
+// eventID уже обработано. Проверка идёт ДО доменной логики, иначе повторная
+// доставка вернула бы ErrInvalidStatusTransition вместо тихого пропуска. Окно
+// гонки между этой проверкой и записью закрывает claim по UNIQUE-constraint
+// внутри UpdateWithLog. Пустой eventID (не событие брокера) пропускается.
+func (s *BookingsService) ensureNotProcessed(ctx context.Context, eventID string) error {
+	if eventID == "" {
+		return nil
+	}
+	processed, err := s.repo.IsEventProcessed(ctx, eventID)
+	if err != nil {
+		return err
+	}
+	if processed {
+		return models.ErrEventAlreadyProcessed
+	}
+	return nil
 }
 
 // Create создаёт новое бронирование.
@@ -105,7 +125,11 @@ func (s *BookingsService) Create(ctx context.Context, req dto.CreateBookingReque
 //  2. Вызов доменного метода StartCancel() (валидация перехода статуса)
 //  3. Сохранение обновлённого состояния и записи журнала в одной транзакции
 //  4. Публикация команды в Catalog
-func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy string) error {
+func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy, eventID string) error {
+	if err := s.ensureNotProcessed(ctx, eventID); err != nil {
+		return err
+	}
+
 	b, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -131,7 +155,7 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy stri
 		InitiatedBy:    initiatedBy,
 	}
 
-	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry, eventID); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 
@@ -147,7 +171,11 @@ func (s *BookingsService) Cancel(ctx context.Context, id int64, initiatedBy stri
 	return nil
 }
 
-func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error {
+func (s *BookingsService) HandleCancelError(ctx context.Context, id int64, eventID string) error {
+	if err := s.ensureNotProcessed(ctx, eventID); err != nil {
+		return err
+	}
+
 	b, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -168,7 +196,7 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 		InitiatedBy:    models.InitiatorSystem,
 	}
 
-	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry, eventID); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 
@@ -177,7 +205,11 @@ func (s *BookingsService) HandleCancelError(ctx context.Context, id int64) error
 	return nil
 }
 
-func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) error {
+func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64, eventID string) error {
+	if err := s.ensureNotProcessed(ctx, eventID); err != nil {
+		return err
+	}
+
 	b, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -198,7 +230,7 @@ func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) err
 		InitiatedBy:    models.InitiatorSystem,
 	}
 
-	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry, eventID); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 
@@ -209,7 +241,11 @@ func (s *BookingsService) HandleConfirmCancel(ctx context.Context, id int64) err
 
 // Confirm подтверждает бронирование по ID.
 // Используется обработчиком событий RabbitMQ.
-func (s *BookingsService) Confirm(ctx context.Context, id int64) error {
+func (s *BookingsService) Confirm(ctx context.Context, id int64, eventID string) error {
+	if err := s.ensureNotProcessed(ctx, eventID); err != nil {
+		return err
+	}
+
 	b, err := s.repo.GetByID(ctx, id)
 	if err != nil {
 		return err
@@ -236,7 +272,7 @@ func (s *BookingsService) Confirm(ctx context.Context, id int64) error {
 		InitiatedBy:    models.InitiatorSystem,
 	}
 
-	if err := s.repo.UpdateWithLog(ctx, b, logEntry); err != nil {
+	if err := s.repo.UpdateWithLog(ctx, b, logEntry, eventID); err != nil {
 		return fmt.Errorf("обновление бронирования: %w", err)
 	}
 

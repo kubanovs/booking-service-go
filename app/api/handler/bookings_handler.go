@@ -19,7 +19,8 @@ import (
 // BookingService определяет командные операции с бронированиями.
 type BookingService interface {
 	Create(ctx context.Context, req dto.CreateBookingRequest) (int64, error)
-	Cancel(ctx context.Context, id int64, initiatedBy string) error
+	// Cancel вызывается из HTTP -- это не событие брокера, поэтому eventID пуст.
+	Cancel(ctx context.Context, id int64, initiatedBy, eventID string) error
 }
 
 // BookingQueries определяет операции чтения бронирований.
@@ -102,7 +103,7 @@ func (h *BookingsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		initiatedBy = strconv.FormatInt(req.UserID, 10)
 	}
 
-	if err := h.service.Cancel(r.Context(), id, initiatedBy); err != nil {
+	if err := h.service.Cancel(r.Context(), id, initiatedBy, ""); err != nil {
 		h.handleServiceError(w, err)
 		return
 	}

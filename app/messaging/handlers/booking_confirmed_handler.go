@@ -3,11 +3,13 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
 
 	"booking-service/app/messaging"
+	"booking-service/app/models"
 	"booking-service/app/service"
 )
 
@@ -42,7 +44,14 @@ func (h *BookingConfirmedHandler) Handle(ctx context.Context, body []byte) error
 		zap.Int64("catalogJobId", event.Id),
 	)
 
-	if err := h.service.Confirm(ctx, bookingID); err != nil {
+	if err := h.service.Confirm(ctx, bookingID, event.EventId); err != nil {
+		if errors.Is(err, models.ErrEventAlreadyProcessed) {
+			h.logger.Warn("дубликат события BookingJobConfirmed, пропускаем",
+				zap.String("eventId", event.EventId),
+				zap.Int64("bookingId", bookingID),
+			)
+			return nil
+		}
 		return fmt.Errorf("подтверждение бронирования %d: %w", bookingID, err)
 	}
 

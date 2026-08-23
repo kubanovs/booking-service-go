@@ -1,15 +1,19 @@
 package handlers
 
 import (
-	"booking-service/app/messaging"
-	"booking-service/app/service"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
+
+	"booking-service/app/messaging"
+	"booking-service/app/models"
+	"booking-service/app/service"
 )
 
+// CancelBookingConfirmationHandler обрабатывает события CancelBookingConfirmation.
 type CancelBookingConfirmationHandler struct {
 	service *service.BookingsService
 	logger  *zap.Logger
@@ -23,7 +27,7 @@ func NewCancelBookingConfirmationHandler(svc *service.BookingsService, logger *z
 	}
 }
 
-// Handle обрабатывает событие отклонения бронирования.
+// Handle обрабатывает событие подтверждения отмены бронирования.
 func (h *CancelBookingConfirmationHandler) Handle(ctx context.Context, body []byte) error {
 	var event messaging.CancelBookingConfirmation
 	if err := json.Unmarshal(body, &event); err != nil {
@@ -40,7 +44,14 @@ func (h *CancelBookingConfirmationHandler) Handle(ctx context.Context, body []by
 		zap.Int64("catalogJobId", event.Id),
 	)
 
-	if err := h.service.HandleConfirmCancel(ctx, bookingID); err != nil {
+	if err := h.service.HandleConfirmCancel(ctx, bookingID, event.EventId); err != nil {
+		if errors.Is(err, models.ErrEventAlreadyProcessed) {
+			h.logger.Warn("дубликат события CancelBookingConfirmation, пропускаем",
+				zap.String("eventId", event.EventId),
+				zap.Int64("bookingId", bookingID),
+			)
+			return nil
+		}
 		return fmt.Errorf("подтверждение отмены бронирования %d: %w", bookingID, err)
 	}
 

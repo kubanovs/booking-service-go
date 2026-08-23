@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"go.uber.org/zap"
@@ -44,7 +45,14 @@ func (h *BookingDeniedHandler) Handle(ctx context.Context, body []byte) error {
 		zap.String("reason", event.Reason),
 	)
 
-	if err := h.service.Cancel(ctx, bookingID, models.InitiatorSystem); err != nil {
+	if err := h.service.Cancel(ctx, bookingID, models.InitiatorSystem, event.EventId); err != nil {
+		if errors.Is(err, models.ErrEventAlreadyProcessed) {
+			h.logger.Warn("дубликат события BookingJobDenied, пропускаем",
+				zap.String("eventId", event.EventId),
+				zap.Int64("bookingId", bookingID),
+			)
+			return nil
+		}
 		return fmt.Errorf("отмена бронирования %d: %w", bookingID, err)
 	}
 

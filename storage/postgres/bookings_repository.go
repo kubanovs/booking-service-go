@@ -260,14 +260,40 @@ func scanBookingRow(scan func(dest ...any) error) (*models.Booking, error) {
 	), nil
 }
 
+// IsEventProcessed сообщает, было ли событие с данным eventID уже обработано.
+// Быстрый путь идемпотентности: позволяет отсеять дубликат до доменной логики.
+func (r *BookingsRepository) IsEventProcessed(ctx context.Context, eventID string) (bool, error) {
+	var exists bool
+	if err := r.pool.QueryRow(ctx, queryEventExists, eventID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("проверка обработанного события: %w", err)
+	}
+	return exists, nil
+}
+
 // UpdateWithLog обновляет бронирование и добавляет запись в журнал
 // в рамках одной транзакции: либо применяется всё, либо ничего.
-func (r *BookingsRepository) UpdateWithLog(ctx context.Context, b *models.Booking, log *models.EventLog) error {
+//
+// Если eventID не пуст (обработка события брокера), первым действием в той же
+// транзакции происходит claim: вставка eventID в processed_events. Пустой результат
+// (ON CONFLICT) означает, что событие уже обработано другим инстансом — возвращаем
+// ErrEventAlreadyProcessed, откатывая транзакцию. Для HTTP-команд eventID пуст,
+// claim пропускается.
+func (r *BookingsRepository) UpdateWithLog(ctx context.Context, b *models.Booking, log *models.EventLog, eventID string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("старт транзакции: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // откат: no-op после успешного Commit
+
+	if eventID != "" {
+		tag, err := tx.Exec(ctx, queryInsertProcessedEvent, eventID)
+		if err != nil {
+			return fmt.Errorf("claim события %s: %w", eventID, err)
+		}
+		if tag.RowsAffected() == 0 {
+			return models.ErrEventAlreadyProcessed
+		}
+	}
 
 	tag, err := tx.Exec(ctx, queryUpdateBooking,
 		string(b.Status()),

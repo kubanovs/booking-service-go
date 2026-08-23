@@ -28,9 +28,11 @@ func (c fixedClock) Now() time.Time { return c.now }
 // мог сверить их после Act. Сам ничего не проверяет.
 type spyRepository struct {
 	existingBooking *models.Booking // nil => GetByID вернёт ErrBookingNotFound
+	eventProcessed  bool            // что вернёт IsEventProcessed
 
 	gotBooking *models.Booking
 	gotLog     *models.EventLog
+	gotEventID string
 }
 
 func (s *spyRepository) CreateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog) (int64, error) {
@@ -46,9 +48,14 @@ func (s *spyRepository) GetByID(ctx context.Context, id int64) (*models.Booking,
 	return s.existingBooking, nil
 }
 
-func (s *spyRepository) UpdateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog) error {
+func (s *spyRepository) IsEventProcessed(ctx context.Context, eventID string) (bool, error) {
+	return s.eventProcessed, nil
+}
+
+func (s *spyRepository) UpdateWithLog(ctx context.Context, booking *models.Booking, log *models.EventLog, eventID string) error {
 	s.gotBooking = booking
 	s.gotLog = log
+	s.gotEventID = eventID
 	return nil
 }
 

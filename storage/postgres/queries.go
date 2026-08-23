@@ -93,4 +93,13 @@ const (
 		SELECT COUNT(*)
 		FROM bookings_log
 		WHERE booking_id = $1`
+
+	queryEventExists = `
+		SELECT EXISTS(SELECT 1 FROM processed_events WHERE event_id = $1)`
+
+	// ON CONFLICT DO NOTHING: при гонке двух инстансов вставка второго вернёт
+	// 0 строк вместо ошибки, что обрабатывается как "уже обработано".
+	queryInsertProcessedEvent = `
+		INSERT INTO processed_events (event_id) VALUES ($1)
+		ON CONFLICT DO NOTHING`
 )

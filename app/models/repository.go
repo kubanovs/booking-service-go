@@ -32,8 +32,13 @@ type BookingRepository interface {
 
 	GetTopResourcesForPeriod(ctx context.Context, limit int, dateFrom time.Time, dateTo time.Time) ([]int, error)
 
+	// IsEventProcessed сообщает, было ли событие с данным eventID уже обработано.
+	IsEventProcessed(ctx context.Context, eventID string) (bool, error)
+
 	// UpdateWithLog обновляет бронирование и добавляет запись в журнал в одной транзакции.
-	UpdateWithLog(ctx context.Context, booking *Booking, log *EventLog) error
+	// Непустой eventID означает обработку события брокера: в той же транзакции
+	// делается claim eventID (защита идемпотентности при горизонтальном масштабировании).
+	UpdateWithLog(ctx context.Context, booking *Booking, log *EventLog, eventID string) error
 
 	// GetLogsByBookingID возвращает записи журнала по бронированию с пагинацией:
 	// список записей и общее количество.
